@@ -7,4 +7,4 @@ use rhq;
 
 create columnfamily raw_metrics (
     schedue_id int primary key
-) with comparator = timestamp and default_validation = timestamp;
+) with comparator = timestamp and default_validation = double;

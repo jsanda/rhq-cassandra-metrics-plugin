@@ -1,9 +1,13 @@
 package org.rhq.server.plugins.metrics.cassandra;
 
+import static java.util.Arrays.asList;
+import static org.rhq.test.AssertUtils.assertPropertiesMatch;
 import static org.testng.Assert.assertEquals;
 
+import java.util.ArrayList;
 import java.util.List;
 
+import org.joda.time.DateTime;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
@@ -15,12 +19,16 @@ import org.rhq.core.domain.measurement.MeasurementReport;
 import org.rhq.core.domain.measurement.MeasurementScheduleRequest;
 import org.rhq.enterprise.server.plugin.pc.ServerPluginContext;
 
+import me.prettyprint.cassandra.serializers.CompositeSerializer;
 import me.prettyprint.cassandra.serializers.DoubleSerializer;
 import me.prettyprint.cassandra.serializers.IntegerSerializer;
 import me.prettyprint.cassandra.serializers.LongSerializer;
+import me.prettyprint.cassandra.serializers.StringSerializer;
+import me.prettyprint.cassandra.service.ColumnSliceIterator;
 import me.prettyprint.hector.api.Cluster;
 import me.prettyprint.hector.api.Keyspace;
 import me.prettyprint.hector.api.beans.ColumnSlice;
+import me.prettyprint.hector.api.beans.Composite;
 import me.prettyprint.hector.api.beans.HColumn;
 import me.prettyprint.hector.api.factory.HFactory;
 import me.prettyprint.hector.api.mutation.Mutator;
@@ -38,28 +46,33 @@ public class CassandraMetricsPluginComponentTest {
 
     private CassandraMetricsPluginComponent metricsServer;
 
+    private Keyspace keyspace;
+
     @BeforeMethod
     public void initServer() throws Exception {
+        Cluster cluster = HFactory.getOrCreateCluster("rhq", "localhost:9160");
+        keyspace = HFactory.createKeyspace("rhq", cluster);
+
         metricsServer = new CassandraMetricsPluginComponent();
         metricsServer.initialize(createTestContext());
     }
 
     @Test
     public void insertNumericData() {
-        Cluster cluster = HFactory.getOrCreateCluster("rhq", "localhost:9160");
-        Keyspace keyspace = HFactory.createKeyspace("rhq", cluster);
-
         int scheduleId = 123;
 
-        Mutator<Integer> deleteMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
-        deleteMutator.delete(scheduleId, "raw_metrics", null, LongSerializer.get());
-        deleteMutator.execute();
+        Mutator<Integer> rawMetricsMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
+        rawMetricsMutator.delete(scheduleId, "raw_metrics", null, LongSerializer.get());
+        rawMetricsMutator.execute();
 
-        long now = System.currentTimeMillis();
-        long oneMinuteAgo = now - MINUTE;
-        long twoMinutesAgo = now - (MINUTE * 2);
-        long threeMinutesAgo = now - (MINUTE * 3);
-        long fiveMinutesAgo = now - (MINUTE * 5);
+        Mutator<String> queueMutator = HFactory.createMutator(keyspace, StringSerializer.get());
+        queueMutator.delete("raw_metrics", "metrics_work_queue", null, CompositeSerializer.get());
+        queueMutator.execute();
+
+        DateTime now = new DateTime();
+        DateTime threeMinutesAgo = now.minusMinutes(3);
+        DateTime twoMinutesAgo = now.minusMinutes(2);
+        DateTime oneMinuteAgo = now.minusMinutes(1);
 
         String scheduleName = getClass().getName() + "_SCHEDULE";
         long interval = MINUTE * 10;
@@ -69,10 +82,10 @@ public class CassandraMetricsPluginComponentTest {
             enabled, dataType);
 
         MeasurementReport report = new MeasurementReport();
-        report.addData(new MeasurementDataNumeric(threeMinutesAgo, request, 3.2));
-        report.addData(new MeasurementDataNumeric(twoMinutesAgo, request, 3.9));
-        report.addData(new MeasurementDataNumeric(oneMinuteAgo, request, 2.6));
-        report.setCollectionTime(now);
+        report.addData(new MeasurementDataNumeric(threeMinutesAgo.getMillis(), request, 3.2));
+        report.addData(new MeasurementDataNumeric(twoMinutesAgo.getMillis(), request, 3.9));
+        report.addData(new MeasurementDataNumeric(oneMinuteAgo.getMillis(), request, 2.6));
+        report.setCollectionTime(now.getMillis());
 
         metricsServer.insertMetrics(report);
 
@@ -83,9 +96,26 @@ public class CassandraMetricsPluginComponentTest {
         query.setRange(null, null, false, 10);
 
         QueryResult<ColumnSlice<Long, Double>> queryResult = query.execute();
-        List<HColumn<Long, Double>> columns = queryResult.get().getColumns();
+        List<HColumn<Long, Double>> actual = queryResult.get().getColumns();
 
-        assertEquals(columns.size(), 3, "Expected to get back one column");
+        List<HColumn<Long, Double>> expected = asList(
+            HFactory.createColumn(threeMinutesAgo.getMillis(), 3.2, 30, LongSerializer.get(), DoubleSerializer.get()),
+            HFactory.createColumn(twoMinutesAgo.getMillis(), 3.9, 30, LongSerializer.get(), DoubleSerializer.get()),
+            HFactory.createColumn(oneMinuteAgo.getMillis(), 2.6, 30, LongSerializer.get(), DoubleSerializer.get())
+        );
+
+        for (int i = 0; i < expected.size(); ++i) {
+            assertPropertiesMatch("The returned columns do not match", expected.get(i), actual.get(i),
+                "clock");
+        }
+
+        DateTime theHour = now.hourOfDay().roundFloorCopy();
+        Composite expectedComposite = new Composite();
+        expectedComposite.addComponent(theHour.getMillis(), LongSerializer.get());
+        expectedComposite.addComponent(scheduleId, IntegerSerializer.get());
+        assertRawMetricsQueueEquals(asList(HFactory.createColumn(expectedComposite, 0, CompositeSerializer.get(),
+            IntegerSerializer.get())));
+
     }
 
     private ServerPluginContext createTestContext() {
@@ -94,37 +124,42 @@ public class CassandraMetricsPluginComponentTest {
         configuration.put(new PropertySimple("hostIP", "localhost:9160"));
         configuration.put(new PropertySimple("keyspace", "rhq"));
         configuration.put(new PropertySimple("rawMetricsColumnFamily", "raw_metrics"));
+        configuration.put(new PropertySimple("metricsQueueColumnFamily", "metrics_work_queue"));
 
         return new ServerPluginContext(null, null, null, configuration, null);
     }
 
-    //@Test
-    public void testInsertNumericData() {
-        Cluster cluster = HFactory.getOrCreateCluster("rhq", "localhost:9160");
-        Keyspace keyspace = HFactory.createKeyspace("rhq", cluster);
+    private void assertRawMetricsQueueEquals(List<HColumn<Composite, Integer>> expected) {
+        SliceQuery<String,Composite, Integer> sliceQuery = HFactory.createSliceQuery(keyspace, StringSerializer.get(),
+            new CompositeSerializer().get(), IntegerSerializer.get());
+        sliceQuery.setColumnFamily("metrics_work_queue");
+        sliceQuery.setKey("raw_metrics");
 
-        Integer scheduleId = 123;
+        ColumnSliceIterator<String, Composite, Integer> iterator = new ColumnSliceIterator<String, Composite, Integer>(
+            sliceQuery, (Composite) null, (Composite) null, false);
 
-        Mutator<Integer> deleteMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
-        deleteMutator.delete(scheduleId, "raw_metrics", null, LongSerializer.get());
-        deleteMutator.execute();
+        List<HColumn<Composite, Integer>> actual = new ArrayList<HColumn<Composite, Integer>>();
+        while (iterator.hasNext()) {
+            actual.add(iterator.next());
+        }
 
-        Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
-        long now = HFactory.createClock();
-        mutator.addInsertion(scheduleId, "raw_metrics", HFactory.createColumn(now, 3.23, now, (1000 * 60),
-            LongSerializer.get(), DoubleSerializer.get()));
-        mutator.execute();
+        assertEquals(actual.size(), expected.size(), "The number of entries in the queue do not match.");
+        int i = 0;
+        for (HColumn<Composite, Integer> expectedColumn :  expected) {
+            HColumn<Composite, Integer> actualColumn = actual.get(i++);
+            assertEquals(getTimestamp(actualColumn.getName()), getTimestamp(expectedColumn.getName()),
+                "The timestamp does not match the expected value.");
+            assertEquals(getScheduleId(actualColumn.getName()), getScheduleId(expectedColumn.getName()),
+                "The schedule id does not match the expected value.");
+        }
+    }
 
-        SliceQuery<Integer, Long, Double> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
-            LongSerializer.get(), DoubleSerializer.get());
-        query.setColumnFamily("raw_metrics");
-        query.setKey(scheduleId);
-        query.setRange(now - 1000, now + 1000, false, 10);
+    private Long getTimestamp(Composite composite) {
+        return composite.get(0, LongSerializer.get());
+    }
 
-        QueryResult<ColumnSlice<Long, Double>> queryResult = query.execute();
-        List<HColumn<Long, Double>> columns = queryResult.get().getColumns();
-
-        assertEquals(columns.size(), 1, "Expected to get back one column");
+    private Integer getScheduleId(Composite composite) {
+        return composite.get(1, IntegerSerializer.get());
     }
 
 }
