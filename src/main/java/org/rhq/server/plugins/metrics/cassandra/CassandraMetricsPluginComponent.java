@@ -108,19 +108,16 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
     @Override
     public void calculateAggregates() {
-        DateTime now = new DateTime();
-        DateTime thisHour = now.hourOfDay().roundFloorCopy();
-        DateTime lastHour = thisHour.minusHours(1);
-
         Keyspace keyspace = HFactory.createKeyspace(keyspaceName, cluster);
 
-        SliceQuery<String,Composite, Integer> sliceQuery = HFactory.createSliceQuery(keyspace, StringSerializer.get(),
-            new CompositeSerializer().get(), IntegerSerializer.get());
-        sliceQuery.setColumnFamily(metricsQueueCF);
-        sliceQuery.setKey(rawMetricsDataCF);
+        SliceQuery<String,Composite, Integer> metricsQueueQuery = HFactory.createSliceQuery(keyspace,
+            StringSerializer.get(), new CompositeSerializer().get(), IntegerSerializer.get());
+        metricsQueueQuery.setColumnFamily(metricsQueueCF);
+        metricsQueueQuery.setKey(rawMetricsDataCF);
 
         ColumnSliceIterator<String, Composite, Integer> queueIterator =
-            new ColumnSliceIterator<String, Composite, Integer>(sliceQuery, (Composite) null, (Composite) null, false);
+            new ColumnSliceIterator<String, Composite, Integer>(metricsQueueQuery, (Composite) null, (Composite) null,
+                false);
 
         Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
 
@@ -131,13 +128,13 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
             DateTime startTime = new DateTime(timestamp);
             DateTime endTime = new DateTime(timestamp).plusHours(1);
 
-            SliceQuery<Integer, Long, Double> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
-                LongSerializer.get(), DoubleSerializer.get());
-            query.setColumnFamily(rawMetricsDataCF);
-            query.setKey(scheduleId);
+            SliceQuery<Integer, Long, Double> rawMetricsQuery = HFactory.createSliceQuery(keyspace,
+                IntegerSerializer.get(), LongSerializer.get(), DoubleSerializer.get());
+            rawMetricsQuery.setColumnFamily(rawMetricsDataCF);
+            rawMetricsQuery.setKey(scheduleId);
 
             ColumnSliceIterator<Integer, Long, Double> sliceIterator = new ColumnSliceIterator<Integer, Long, Double>(
-                query, startTime.getMillis(), endTime.getMillis(), false);
+                rawMetricsQuery, startTime.getMillis(), endTime.getMillis(), false);
             sliceIterator.hasNext();
             HColumn<Long, Double> rawColumn = sliceIterator.next();
             double min = rawColumn.getValue();

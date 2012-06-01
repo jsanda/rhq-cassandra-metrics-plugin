@@ -124,7 +124,7 @@ public class CassandraMetricsPluginComponentTest {
     }
 
     @Test
-    public void calculateAggregratesForRawData() {
+    public void calculateOneHourAggregatesForOneSchedule() {
         int scheduleId = 123;
 
         purgeDB(scheduleId);
@@ -156,31 +156,58 @@ public class CassandraMetricsPluginComponentTest {
             HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MIN), 2.6),
             HFactory.createColumn(createAggregateKey(lastHour, AggregateType.AVG), (3.9 + 3.2 + 2.6) / 3));
 
-        SliceQuery<Integer, Composite, Double> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
-            CompositeSerializer.get(), DoubleSerializer.get());
-        query.setColumnFamily(ONE_HOUR_METRIC_DATA_CF);
-        query.setKey(scheduleId);
-
-        ColumnSliceIterator<Integer, Composite, Double> iterator = new ColumnSliceIterator<Integer, Composite, Double>(
-            query, (Composite) null, (Composite) null, false);
-
-        List<HColumn<Composite, Double>> actual = new ArrayList<HColumn<Composite, Double>>();
-        while (iterator.hasNext()) {
-            actual.add(iterator.next());
-        }
-
-        assertEquals(actual.size(), expected.size(), "The number of columns do not match.");
-        int i = 0;
-        for (HColumn<Composite, Double> expectedColumn : expected) {
-            HColumn<Composite, Double> actualColumn = actual.get(i++);
-            assertEquals(getTimestamp(actualColumn.getName()), getTimestamp(expectedColumn.getName()),
-                "The timestamp does not match the expected value.");
-            assertEquals(getAggregateType(actualColumn.getName()), getAggregateType(expectedColumn.getName()),
-                "The column type does not match the expected value");
-        }
+        assertOneHourDataEquals(scheduleId, expected);
     }
 
-    private void purgeDB(int... scheduleIds) {
+    @Test
+    public void calculateOneAggregatesForMultipleSchedules() {
+        List<Integer> scheduleIds = asList(123, 456);
+        List<String> scheduleNames = asList(getClass().getName() + "_SCHEDULE1", getClass().getName() + "SCHEDULE2");
+        long interval = MINUTE * 15;
+        boolean enabled = true;
+        DataType dataType = DataType.MEASUREMENT;
+
+        List<MeasurementScheduleRequest> requests = asList(
+            new MeasurementScheduleRequest(scheduleIds.get(0), scheduleNames.get(0), interval, enabled, dataType),
+            new MeasurementScheduleRequest(scheduleIds.get(1), scheduleNames.get(1), interval, enabled, dataType));
+
+        purgeDB(scheduleIds);
+
+        DateTime now = new DateTime();
+        DateTime lastHour = now.hourOfDay().roundFloorCopy().minusHours(1);
+        DateTime firstMetricTime = lastHour.plusMinutes(5);
+        DateTime secondMetricTime = lastHour.plusMinutes(10);
+        DateTime thirdMetricTime = lastHour.plusMinutes(15);
+
+        MeasurementReport report = new MeasurementReport();
+        report.addData(new MeasurementDataNumeric(firstMetricTime.getMillis(), requests.get(0), 1.1));
+        report.addData(new MeasurementDataNumeric(secondMetricTime.getMillis(), requests.get(0), 2.2));
+        report.addData(new MeasurementDataNumeric(thirdMetricTime.getMillis(), requests.get(0), 3.3));
+        report.addData(new MeasurementDataNumeric(firstMetricTime.getMillis(), requests.get(1), 4.4));
+        report.addData(new MeasurementDataNumeric(secondMetricTime.getMillis(), requests.get(1), 5.5));
+        report.addData(new MeasurementDataNumeric(thirdMetricTime.getMillis(), requests.get(1), 6.6));
+        report.setCollectionTime(thirdMetricTime.plusMillis(10).getMillis());
+
+        metricsServer.insertMetrics(report);
+        metricsServer.calculateAggregates();
+
+        assertOneHourDataEquals(scheduleIds.get(0), asList(
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MAX), 3.3),
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MIN), 1.1),
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.AVG), (1.1 + 2.2 + 3.3) / 3)
+        ));
+        assertOneHourDataEquals(scheduleIds.get(1), asList(
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MAX), 6.6),
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MIN), 4.4),
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.AVG), (4.4 + 5.5 + 6.6) / 3)
+        ));
+    }
+
+    private void purgeDB(List<Integer> scheduleIds) {
+        purgeDB(scheduleIds.toArray(new Integer[scheduleIds.size()]));
+    }
+
+    private void purgeDB(Integer... scheduleIds) {
         purgeQueue();
         purgeNumericMetricsCF(RAW_METRIC_DATA_CF, scheduleIds);
         purgeNumericMetricsCF(ONE_HOUR_METRIC_DATA_CF, scheduleIds);
@@ -192,7 +219,7 @@ public class CassandraMetricsPluginComponentTest {
         queueMutator.execute();
     }
 
-    private void purgeNumericMetricsCF(String columnFamily, int... scheduleIds) {
+    private void purgeNumericMetricsCF(String columnFamily, Integer... scheduleIds) {
         Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
         for (int id : scheduleIds) {
             mutator.addDeletion(id, columnFamily, null, LongSerializer.get());
@@ -234,6 +261,33 @@ public class CassandraMetricsPluginComponentTest {
                 "The timestamp does not match the expected value.");
             assertEquals(getScheduleId(actualColumn.getName()), getScheduleId(expectedColumn.getName()),
                 "The schedule id does not match the expected value.");
+        }
+    }
+
+    private void assertOneHourDataEquals(int scheduleId, List<HColumn<Composite, Double>> expected) {
+        SliceQuery<Integer, Composite, Double> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
+            CompositeSerializer.get(), DoubleSerializer.get());
+        query.setColumnFamily(ONE_HOUR_METRIC_DATA_CF);
+        query.setKey(scheduleId);
+
+        ColumnSliceIterator<Integer, Composite, Double> iterator = new ColumnSliceIterator<Integer, Composite, Double>(
+            query, (Composite) null, (Composite) null, false);
+
+        List<HColumn<Composite, Double>> actual = new ArrayList<HColumn<Composite, Double>>();
+        while (iterator.hasNext()) {
+            actual.add(iterator.next());
+        }
+
+        String prefix = "The one hour data for schedule id " + scheduleId + " is wrong.";
+
+        assertEquals(actual.size(), expected.size(), prefix + " The number of columns do not match.");
+        int i = 0;
+        for (HColumn<Composite, Double> expectedColumn : expected) {
+            HColumn<Composite, Double> actualColumn = actual.get(i++);
+            assertEquals(getTimestamp(actualColumn.getName()), getTimestamp(expectedColumn.getName()),
+                prefix + " The timestamp does not match the expected value.");
+            assertEquals(getAggregateType(actualColumn.getName()), getAggregateType(expectedColumn.getName()),
+                prefix + " The column data type does not match the expected value");
         }
     }
 
