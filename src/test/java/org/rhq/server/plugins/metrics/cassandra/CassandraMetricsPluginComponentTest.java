@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import org.joda.time.DateTime;
+import org.joda.time.Duration;
 import org.testng.annotations.BeforeMethod;
 import org.testng.annotations.Test;
 
@@ -44,6 +45,12 @@ public class CassandraMetricsPluginComponentTest {
 
     private final long MINUTE = 60 * SECOND;
 
+    private final String RAW_METRIC_DATA_CF = "raw_metrics";
+
+    private final String ONE_HOUR_METRIC_DATA_CF = "one_hour_metric_data";
+
+    private final String METRICS_WORK_QUEUE_CF = "metrics_work_queue";
+
     private CassandraMetricsPluginComponent metricsServer;
 
     private Keyspace keyspace;
@@ -58,21 +65,17 @@ public class CassandraMetricsPluginComponentTest {
     }
 
     @Test
-    public void insertNumericData() {
+    public void insertMultipleRawNumericDataForOneSchedule() {
         int scheduleId = 123;
 
-        Mutator<Integer> rawMetricsMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
-        rawMetricsMutator.delete(scheduleId, "raw_metrics", null, LongSerializer.get());
-        rawMetricsMutator.execute();
-
-        Mutator<String> queueMutator = HFactory.createMutator(keyspace, StringSerializer.get());
-        queueMutator.delete("raw_metrics", "metrics_work_queue", null, CompositeSerializer.get());
-        queueMutator.execute();
+        purgeDB(scheduleId);
 
         DateTime now = new DateTime();
         DateTime threeMinutesAgo = now.minusMinutes(3);
         DateTime twoMinutesAgo = now.minusMinutes(2);
         DateTime oneMinuteAgo = now.minusMinutes(1);
+
+        int sevenDays = Duration.standardDays(7).toStandardSeconds().getSeconds();
 
         String scheduleName = getClass().getName() + "_SCHEDULE";
         long interval = MINUTE * 10;
@@ -91,7 +94,7 @@ public class CassandraMetricsPluginComponentTest {
 
         SliceQuery<Integer, Long, Double> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
             LongSerializer.get(), DoubleSerializer.get());
-        query.setColumnFamily("raw_metrics");
+        query.setColumnFamily(RAW_METRIC_DATA_CF);
         query.setKey(scheduleId);
         query.setRange(null, null, false, 10);
 
@@ -99,9 +102,12 @@ public class CassandraMetricsPluginComponentTest {
         List<HColumn<Long, Double>> actual = queryResult.get().getColumns();
 
         List<HColumn<Long, Double>> expected = asList(
-            HFactory.createColumn(threeMinutesAgo.getMillis(), 3.2, 30, LongSerializer.get(), DoubleSerializer.get()),
-            HFactory.createColumn(twoMinutesAgo.getMillis(), 3.9, 30, LongSerializer.get(), DoubleSerializer.get()),
-            HFactory.createColumn(oneMinuteAgo.getMillis(), 2.6, 30, LongSerializer.get(), DoubleSerializer.get())
+            HFactory.createColumn(threeMinutesAgo.getMillis(), 3.2, sevenDays, LongSerializer.get(),
+                DoubleSerializer.get()),
+            HFactory.createColumn(twoMinutesAgo.getMillis(), 3.9, sevenDays, LongSerializer.get(),
+                DoubleSerializer.get()),
+            HFactory.createColumn(oneMinuteAgo.getMillis(), 2.6, sevenDays, LongSerializer.get(),
+                DoubleSerializer.get())
         );
 
         for (int i = 0; i < expected.size(); ++i) {
@@ -115,7 +121,83 @@ public class CassandraMetricsPluginComponentTest {
         expectedComposite.addComponent(scheduleId, IntegerSerializer.get());
         assertRawMetricsQueueEquals(asList(HFactory.createColumn(expectedComposite, 0, CompositeSerializer.get(),
             IntegerSerializer.get())));
+    }
 
+    @Test
+    public void calculateAggregratesForRawData() {
+        int scheduleId = 123;
+
+        purgeDB(scheduleId);
+
+        DateTime now = new DateTime();
+        DateTime lastHour = now.hourOfDay().roundFloorCopy().minusHours(1);
+        DateTime firstMetricTime = lastHour.plusMinutes(5);
+        DateTime secondMetricTime = lastHour.plusMinutes(10);
+        DateTime thirdMetricTime = lastHour.plusMinutes(15);
+
+        String scheduleName = getClass().getName() + "_SCHEDULE";
+        long interval = MINUTE * 15;
+        boolean enabled = true;
+        DataType dataType = DataType.MEASUREMENT;
+        MeasurementScheduleRequest request = new MeasurementScheduleRequest(scheduleId, scheduleName, interval,
+            enabled, dataType);
+
+        MeasurementReport report = new MeasurementReport();
+        report.addData(new MeasurementDataNumeric(firstMetricTime.getMillis(), request, 3.2));
+        report.addData(new MeasurementDataNumeric(secondMetricTime.getMillis(), request, 3.9));
+        report.addData(new MeasurementDataNumeric(thirdMetricTime.getMillis(), request, 2.6));
+        report.setCollectionTime(thirdMetricTime.plusMillis(500).getMillis());
+
+        metricsServer.insertMetrics(report);
+        metricsServer.calculateAggregates();
+
+        List<HColumn<Composite, Double>> expected = asList(
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MAX), 3.9),
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MIN), 2.6),
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.AVG), (3.9 + 3.2 + 2.6) / 3));
+
+        SliceQuery<Integer, Composite, Double> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
+            CompositeSerializer.get(), DoubleSerializer.get());
+        query.setColumnFamily(ONE_HOUR_METRIC_DATA_CF);
+        query.setKey(scheduleId);
+
+        ColumnSliceIterator<Integer, Composite, Double> iterator = new ColumnSliceIterator<Integer, Composite, Double>(
+            query, (Composite) null, (Composite) null, false);
+
+        List<HColumn<Composite, Double>> actual = new ArrayList<HColumn<Composite, Double>>();
+        while (iterator.hasNext()) {
+            actual.add(iterator.next());
+        }
+
+        assertEquals(actual.size(), expected.size(), "The number of columns do not match.");
+        int i = 0;
+        for (HColumn<Composite, Double> expectedColumn : expected) {
+            HColumn<Composite, Double> actualColumn = actual.get(i++);
+            assertEquals(getTimestamp(actualColumn.getName()), getTimestamp(expectedColumn.getName()),
+                "The timestamp does not match the expected value.");
+            assertEquals(getAggregateType(actualColumn.getName()), getAggregateType(expectedColumn.getName()),
+                "The column type does not match the expected value");
+        }
+    }
+
+    private void purgeDB(int... scheduleIds) {
+        purgeQueue();
+        purgeNumericMetricsCF(RAW_METRIC_DATA_CF, scheduleIds);
+        purgeNumericMetricsCF(ONE_HOUR_METRIC_DATA_CF, scheduleIds);
+    }
+
+    private void purgeQueue() {
+        Mutator<String> queueMutator = HFactory.createMutator(keyspace, StringSerializer.get());
+        queueMutator.delete(RAW_METRIC_DATA_CF, METRICS_WORK_QUEUE_CF, null, CompositeSerializer.get());
+        queueMutator.execute();
+    }
+
+    private void purgeNumericMetricsCF(String columnFamily, int... scheduleIds) {
+        Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
+        for (int id : scheduleIds) {
+            mutator.addDeletion(id, columnFamily, null, LongSerializer.get());
+        }
+        mutator.execute();
     }
 
     private ServerPluginContext createTestContext() {
@@ -123,8 +205,9 @@ public class CassandraMetricsPluginComponentTest {
         configuration.put(new PropertySimple("clusterName", "rhq"));
         configuration.put(new PropertySimple("hostIP", "localhost:9160"));
         configuration.put(new PropertySimple("keyspace", "rhq"));
-        configuration.put(new PropertySimple("rawMetricsColumnFamily", "raw_metrics"));
-        configuration.put(new PropertySimple("metricsQueueColumnFamily", "metrics_work_queue"));
+        configuration.put(new PropertySimple("rawMetricsColumnFamily", RAW_METRIC_DATA_CF));
+        configuration.put(new PropertySimple("oneHourMetricsColumnFamily", ONE_HOUR_METRIC_DATA_CF));
+        configuration.put(new PropertySimple("metricsQueueColumnFamily", METRICS_WORK_QUEUE_CF));
 
         return new ServerPluginContext(null, null, null, configuration, null);
     }
@@ -132,8 +215,8 @@ public class CassandraMetricsPluginComponentTest {
     private void assertRawMetricsQueueEquals(List<HColumn<Composite, Integer>> expected) {
         SliceQuery<String,Composite, Integer> sliceQuery = HFactory.createSliceQuery(keyspace, StringSerializer.get(),
             new CompositeSerializer().get(), IntegerSerializer.get());
-        sliceQuery.setColumnFamily("metrics_work_queue");
-        sliceQuery.setKey("raw_metrics");
+        sliceQuery.setColumnFamily(METRICS_WORK_QUEUE_CF);
+        sliceQuery.setKey(RAW_METRIC_DATA_CF);
 
         ColumnSliceIterator<String, Composite, Integer> iterator = new ColumnSliceIterator<String, Composite, Integer>(
             sliceQuery, (Composite) null, (Composite) null, false);
@@ -160,6 +243,19 @@ public class CassandraMetricsPluginComponentTest {
 
     private Integer getScheduleId(Composite composite) {
         return composite.get(1, IntegerSerializer.get());
+    }
+
+    private AggregateType getAggregateType(Composite composite) {
+        Integer type = composite.get(1, IntegerSerializer.get());
+        return AggregateType.valueOf(type);
+    }
+
+    private Composite createAggregateKey(DateTime dateTime, AggregateType type) {
+        Composite composite = new Composite();
+        composite.addComponent(dateTime.getMillis(), LongSerializer.get());
+        composite.addComponent(type.ordinal(), IntegerSerializer.get());
+
+        return composite;
     }
 
 }

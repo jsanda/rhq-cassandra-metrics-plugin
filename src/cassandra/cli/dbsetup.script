@@ -10,6 +10,11 @@ create column family raw_metrics
     default_validation_class = DoubleType and
     key_validation_class = Int32Type;
 
+create column family one_hour_metric_data
+    with comparator = 'CompositeType(DateType, Int32Type)' and
+    default_validation_class = DoubleType and
+    key_validation_class = Int32Type;
+
 create column family metrics_work_queue
     with comparator = 'CompositeType(DateType, Int32Type)' and
     default_validation_class = Int32Type and
