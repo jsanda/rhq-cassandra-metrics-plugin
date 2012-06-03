@@ -41,6 +41,10 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
     private String oneHourMetricsDataCF;
 
+    private String sixHourMetricsDataCF;
+
+    private String twentyFourHourMetricsDataCF;
+
     private String metricsQueueCF;
 
     @Override
@@ -52,6 +56,8 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         keyspaceName = pluginConfig.getSimpleValue("keyspace");
         rawMetricsDataCF = pluginConfig.getSimpleValue("rawMetricsColumnFamily");
         oneHourMetricsDataCF = pluginConfig.getSimpleValue("oneHourMetricsColumnFamily");
+        sixHourMetricsDataCF = pluginConfig.getSimpleValue("sixHourMetricsColumnFamily");
+        twentyFourHourMetricsDataCF = pluginConfig.getSimpleValue("twentyFourHourMetricsColumnFamily");
         metricsQueueCF = pluginConfig.getSimpleValue("metricsQueueColumnFamily");
     }
 
@@ -87,10 +93,11 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
         mutator.execute();
 
-        updateMetricsQueue(keyspace, collectionTime, scheduleIds);
+        updateMetricsQueue(keyspace, oneHourMetricsDataCF, collectionTime, scheduleIds);
     }
 
-    private MutationResult updateMetricsQueue(Keyspace keyspace, long collectionTime, Set<Integer> scheduleIds) {
+    private MutationResult updateMetricsQueue(Keyspace keyspace, String columnFamily, long collectionTime,
+        Set<Integer> scheduleIds) {
         DateTime collectionHour = new DateTime(collectionTime).hourOfDay().roundFloorCopy();
         Mutator<String> mutator = HFactory.createMutator(keyspace, StringSerializer.get());
 
@@ -100,7 +107,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
             composite.addComponent(scheduleId, IntegerSerializer.get());
             HColumn<Composite, Integer> column = HFactory.createColumn(composite, 0,
                 CompositeSerializer.get(), IntegerSerializer.get());
-            mutator.addInsertion(rawMetricsDataCF, metricsQueueCF, column);
+            mutator.addInsertion(columnFamily, metricsQueueCF, column);
         }
 
         return mutator.execute();
@@ -113,7 +120,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         SliceQuery<String,Composite, Integer> metricsQueueQuery = HFactory.createSliceQuery(keyspace,
             StringSerializer.get(), new CompositeSerializer().get(), IntegerSerializer.get());
         metricsQueueQuery.setColumnFamily(metricsQueueCF);
-        metricsQueueQuery.setKey(rawMetricsDataCF);
+        metricsQueueQuery.setKey(oneHourMetricsDataCF);
 
         ColumnSliceIterator<String, Composite, Integer> queueIterator =
             new ColumnSliceIterator<String, Composite, Integer>(metricsQueueQuery, (Composite) null, (Composite) null,

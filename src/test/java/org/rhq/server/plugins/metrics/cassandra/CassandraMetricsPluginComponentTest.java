@@ -49,6 +49,10 @@ public class CassandraMetricsPluginComponentTest {
 
     private final String ONE_HOUR_METRIC_DATA_CF = "one_hour_metric_data";
 
+    private final String SIX_HOUR_METRIC_DATA_CF = "six_hour_metric_data";
+
+    private final String TWENTY_FOUR_HOUR_METRIC_DATA_CF = "twenty_four_hour_metric_data";
+
     private final String METRICS_WORK_QUEUE_CF = "metrics_work_queue";
 
     private CassandraMetricsPluginComponent metricsServer;
@@ -119,12 +123,12 @@ public class CassandraMetricsPluginComponentTest {
         Composite expectedComposite = new Composite();
         expectedComposite.addComponent(theHour.getMillis(), LongSerializer.get());
         expectedComposite.addComponent(scheduleId, IntegerSerializer.get());
-        assertRawMetricsQueueEquals(asList(HFactory.createColumn(expectedComposite, 0, CompositeSerializer.get(),
+        assertOneHourMetricsQueueEquals(asList(HFactory.createColumn(expectedComposite, 0, CompositeSerializer.get(),
             IntegerSerializer.get())));
     }
 
     @Test
-    public void calculateOneHourAggregatesForOneSchedule() {
+    public void calculateAggregatesForOneScheduleWhenDBIsEmpty() {
         int scheduleId = 123;
 
         purgeDB(scheduleId);
@@ -151,16 +155,61 @@ public class CassandraMetricsPluginComponentTest {
         metricsServer.insertMetrics(report);
         metricsServer.calculateAggregates();
 
-        List<HColumn<Composite, Double>> expected = asList(
+        // verify one hour metric data is calculated
+        List<HColumn<Composite, Double>> expected1HourData = asList(
             HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MAX), 3.9),
             HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MIN), 2.6),
             HFactory.createColumn(createAggregateKey(lastHour, AggregateType.AVG), (3.9 + 3.2 + 2.6) / 3));
 
-        assertOneHourDataEquals(scheduleId, expected);
+        assert1HourDataEquals(scheduleId, expected1HourData);
+
+        // verify six hour metric data is calculated
+        List<HColumn<Composite, Double>> expected6HourData = asList(
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MAX), 3.9),
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MIN), 2.6),
+            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.AVG), (3.9 + 3.2 + 2.6) / 3));
     }
 
     @Test
-    public void calculateOneAggregatesForMultipleSchedules() {
+    public void getMaxColumn() {
+        int scheduleId = 123;
+
+        purgeDB(scheduleId);
+
+        DateTime now = new DateTime();
+        DateTime lastHour = now.hourOfDay().roundFloorCopy().minusHours(1);
+        DateTime firstMetricTime = lastHour.plusMinutes(5);
+        DateTime secondMetricTime = lastHour.plusMinutes(10);
+        DateTime thirdMetricTime = lastHour.plusMinutes(15);
+
+        String scheduleName = getClass().getName() + "_SCHEDULE";
+        long interval = MINUTE * 15;
+        boolean enabled = true;
+        DataType dataType = DataType.MEASUREMENT;
+        MeasurementScheduleRequest request = new MeasurementScheduleRequest(scheduleId, scheduleName, interval,
+            enabled, dataType);
+
+        MeasurementReport report = new MeasurementReport();
+        report.addData(new MeasurementDataNumeric(firstMetricTime.getMillis(), request, 3.2));
+        report.addData(new MeasurementDataNumeric(secondMetricTime.getMillis(), request, 3.9));
+        report.addData(new MeasurementDataNumeric(thirdMetricTime.getMillis(), request, 2.6));
+        report.setCollectionTime(thirdMetricTime.plusMillis(500).getMillis());
+
+        metricsServer.insertMetrics(report);
+
+        SliceQuery<Integer, Long, Double> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
+            LongSerializer.get(), DoubleSerializer.get());
+        query.setColumnFamily(RAW_METRIC_DATA_CF);
+        query.setKey(scheduleId);
+        query.setRange((Long) null, (Long) null, true, 1);
+
+        QueryResult<ColumnSlice<Long, Double>> result = query.execute();
+        ColumnSlice<Long, Double> slice = result.get();
+        List<HColumn<Long, Double>> columns = slice.getColumns();
+    }
+
+    @Test
+    public void calculateOneHourAggregatesForMultipleSchedules() {
         List<Integer> scheduleIds = asList(123, 456);
         List<String> scheduleNames = asList(getClass().getName() + "_SCHEDULE1", getClass().getName() + "SCHEDULE2");
         long interval = MINUTE * 15;
@@ -191,12 +240,12 @@ public class CassandraMetricsPluginComponentTest {
         metricsServer.insertMetrics(report);
         metricsServer.calculateAggregates();
 
-        assertOneHourDataEquals(scheduleIds.get(0), asList(
+        assert1HourDataEquals(scheduleIds.get(0), asList(
             HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MAX), 3.3),
             HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MIN), 1.1),
             HFactory.createColumn(createAggregateKey(lastHour, AggregateType.AVG), (1.1 + 2.2 + 3.3) / 3)
         ));
-        assertOneHourDataEquals(scheduleIds.get(1), asList(
+        assert1HourDataEquals(scheduleIds.get(1), asList(
             HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MAX), 6.6),
             HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MIN), 4.4),
             HFactory.createColumn(createAggregateKey(lastHour, AggregateType.AVG), (4.4 + 5.5 + 6.6) / 3)
@@ -215,7 +264,7 @@ public class CassandraMetricsPluginComponentTest {
 
     private void purgeQueue() {
         Mutator<String> queueMutator = HFactory.createMutator(keyspace, StringSerializer.get());
-        queueMutator.delete(RAW_METRIC_DATA_CF, METRICS_WORK_QUEUE_CF, null, CompositeSerializer.get());
+        queueMutator.delete(ONE_HOUR_METRIC_DATA_CF, METRICS_WORK_QUEUE_CF, null, CompositeSerializer.get());
         queueMutator.execute();
     }
 
@@ -234,16 +283,18 @@ public class CassandraMetricsPluginComponentTest {
         configuration.put(new PropertySimple("keyspace", "rhq"));
         configuration.put(new PropertySimple("rawMetricsColumnFamily", RAW_METRIC_DATA_CF));
         configuration.put(new PropertySimple("oneHourMetricsColumnFamily", ONE_HOUR_METRIC_DATA_CF));
+        configuration.put(new PropertySimple("sixHourMetricsColumnFamily", SIX_HOUR_METRIC_DATA_CF));
+        configuration.put(new PropertySimple("twent4FourHourMetricsColumnFamily", TWENTY_FOUR_HOUR_METRIC_DATA_CF));
         configuration.put(new PropertySimple("metricsQueueColumnFamily", METRICS_WORK_QUEUE_CF));
 
         return new ServerPluginContext(null, null, null, configuration, null);
     }
 
-    private void assertRawMetricsQueueEquals(List<HColumn<Composite, Integer>> expected) {
+    private void assertOneHourMetricsQueueEquals(List<HColumn<Composite, Integer>> expected) {
         SliceQuery<String,Composite, Integer> sliceQuery = HFactory.createSliceQuery(keyspace, StringSerializer.get(),
             new CompositeSerializer().get(), IntegerSerializer.get());
         sliceQuery.setColumnFamily(METRICS_WORK_QUEUE_CF);
-        sliceQuery.setKey(RAW_METRIC_DATA_CF);
+        sliceQuery.setKey(ONE_HOUR_METRIC_DATA_CF);
 
         ColumnSliceIterator<String, Composite, Integer> iterator = new ColumnSliceIterator<String, Composite, Integer>(
             sliceQuery, (Composite) null, (Composite) null, false);
@@ -264,10 +315,23 @@ public class CassandraMetricsPluginComponentTest {
         }
     }
 
-    private void assertOneHourDataEquals(int scheduleId, List<HColumn<Composite, Double>> expected) {
+    private void assert1HourDataEquals(int scheduleId, List<HColumn<Composite, Double>> expected) {
+        assertMetricDataEquals(scheduleId, ONE_HOUR_METRIC_DATA_CF, expected);
+    }
+
+    private void assert6HourDataEquals(int scheduleId, List<HColumn<Composite, Double>> expected) {
+        assertMetricDataEquals(scheduleId, SIX_HOUR_METRIC_DATA_CF, expected);
+    }
+
+    private void assert24HourDataEquals(int scheduleId, List<HColumn<Composite, Double>> expected) {
+        assertMetricDataEquals(scheduleId, TWENTY_FOUR_HOUR_METRIC_DATA_CF, expected);
+    }
+
+    private void assertMetricDataEquals(int scheduleId, String columnFamily, List<HColumn<Composite,
+        Double>> expected) {
         SliceQuery<Integer, Composite, Double> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
             CompositeSerializer.get(), DoubleSerializer.get());
-        query.setColumnFamily(ONE_HOUR_METRIC_DATA_CF);
+        query.setColumnFamily(columnFamily);
         query.setKey(scheduleId);
 
         ColumnSliceIterator<Integer, Composite, Double> iterator = new ColumnSliceIterator<Integer, Composite, Double>(
@@ -278,7 +342,16 @@ public class CassandraMetricsPluginComponentTest {
             actual.add(iterator.next());
         }
 
-        String prefix = "The one hour data for schedule id " + scheduleId + " is wrong.";
+        String prefix;
+        if (columnFamily.equals(ONE_HOUR_METRIC_DATA_CF)) {
+            prefix = "The one hour data for schedule id " + scheduleId + " is wrong.";
+        } else if (columnFamily.equals(SIX_HOUR_METRIC_DATA_CF)) {
+            prefix = "The six hour data for schedule id " + scheduleId + " is wrong.";
+        } else if (columnFamily.equals(TWENTY_FOUR_HOUR_METRIC_DATA_CF)) {
+            prefix = "The twenty-four hour data for schedule id " + scheduleId + " is wrong.";
+        } else {
+            throw new IllegalArgumentException(columnFamily + " is not a recognized column family");
+        }
 
         assertEquals(actual.size(), expected.size(), prefix + " The number of columns do not match.");
         int i = 0;
