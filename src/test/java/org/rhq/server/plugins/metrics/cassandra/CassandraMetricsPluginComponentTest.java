@@ -204,7 +204,7 @@ public class CassandraMetricsPluginComponentTest {
     }
 
     @Test
-    public void aggregateRawDataDuring9thHourWhenDBIsEmpty() {
+    public void aggregateRawDataDuring9thHour() {
         int scheduleId = 123;
 
         purgeDB(scheduleId);
@@ -247,16 +247,10 @@ public class CassandraMetricsPluginComponentTest {
 
         // verify that the 1 hour aggregates are calculated
 
-        // The ttl for 1 hour data is 14 days.
-        int ttl = TWO_WEEKS;
-
         assert1HourDataEquals(scheduleId, asList(
-            HFactory.createColumn(createAggregateKey(hour8, AggregateType.MAX), thirdValue, ttl,
-                CompositeSerializer.get(), DoubleSerializer.get()),
-            HFactory.createColumn(createAggregateKey(hour8, AggregateType.MIN), firstValue, ttl,
-                CompositeSerializer.get(), DoubleSerializer.get()),
-            HFactory.createColumn(createAggregateKey(hour8, AggregateType.AVG),
-                (firstValue + secondValue + thirdValue) / 3, ttl, CompositeSerializer.get(), DoubleSerializer.get())
+            create1HourColumn(hour8, AggregateType.MAX, thirdValue),
+            create1HourColumn(hour8, AggregateType.MIN, firstValue),
+            create1HourColumn(hour8, AggregateType.AVG, (firstValue + secondValue + thirdValue) / 3)
         ));
 
         Chronology chronology = GregorianChronology.getInstance();
@@ -349,6 +343,68 @@ public class CassandraMetricsPluginComponentTest {
 
         // verify that 6 hour data is not rolled up into the 24 hour bucket
         assert24HourDataEmpty(scheduleId);
+    }
+
+    @Test
+    public void aggregate6HourDataDuring24thHour() {
+        // set up the test fixture
+        int scheduleId = 123;
+
+        purgeDB(scheduleId);
+
+        DateTime now = new DateTime();
+        DateTime hour0 = now.hourOfDay().roundFloorCopy().minusHours(now.hourOfDay().get());
+        DateTime hour12 = hour0.plusHours(12);
+        DateTime hour6 = hour0.plusHours(6);
+        DateTime hour24 = hour0.plusHours(24);
+
+        double min1 = 1.1;
+        double avg1 = 2.2;
+        double max1 = 3.3;
+
+        double min2 = 4.4;
+        double avg2 = 5.5;
+        double max2 = 6.6;
+
+        // insert 6 hour data to be aggregated
+        Mutator<Integer> sixHourMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
+        sixHourMutator.addInsertion(scheduleId, SIX_HOUR_METRIC_DATA_CF, create6HourColumn(hour6, AggregateType.MAX,
+            max1));
+        sixHourMutator.addInsertion(scheduleId, SIX_HOUR_METRIC_DATA_CF, create6HourColumn(hour6, AggregateType.MIN,
+            min1));
+        sixHourMutator.addInsertion(scheduleId, SIX_HOUR_METRIC_DATA_CF, create6HourColumn(hour6, AggregateType.AVG,
+            avg1));
+        sixHourMutator.addInsertion(scheduleId, SIX_HOUR_METRIC_DATA_CF, create6HourColumn(hour12, AggregateType.MAX,
+            max2));
+        sixHourMutator.addInsertion(scheduleId, SIX_HOUR_METRIC_DATA_CF, create6HourColumn(hour12, AggregateType.MIN,
+            min2));
+        sixHourMutator.addInsertion(scheduleId, SIX_HOUR_METRIC_DATA_CF, create6HourColumn(hour12, AggregateType.AVG,
+            avg2));
+        sixHourMutator.execute();
+
+        // update the 24 queue
+        Mutator<String> queueMutator = HFactory.createMutator(keyspace, StringSerializer.get());
+        Composite key = createQueueColumnName(hour0, scheduleId);
+        HColumn<Composite, Integer> twentyFourHourQueueColumn = HFactory.createColumn(key, 0, CompositeSerializer.get(),
+            IntegerSerializer.get());
+        queueMutator.addInsertion(TWENTY_FOUR_HOUR_METRIC_DATA_CF, METRICS_WORK_QUEUE_CF, twentyFourHourQueueColumn);
+
+        queueMutator.execute();
+
+        // execute the system under test
+        metricsServer.setCurrentHour(hour24);
+        metricsServer.calculateAggregates();
+
+        // verify the results
+        // verify that the 6 hour data is aggregated
+        assert24HourDataEquals(scheduleId, asList(
+            create24HourColumn(hour0, AggregateType.MAX, max2),
+            create24HourColumn(hour0, AggregateType.MIN, min2),
+            create24HourColumn(hour0, AggregateType.AVG, (avg1 + avg2) / 2)
+        ));
+
+        // verify that the 6 queue is updated
+        assert6HourMetricsQueueEmpty(scheduleId);
     }
 
     private HColumn<Long, Double> createRawDataColumn(DateTime timestamp, double value) {
