@@ -11,6 +11,7 @@ import org.joda.time.DateTimeComparator;
 import org.joda.time.DateTimeField;
 import org.joda.time.DateTimeFieldType;
 import org.joda.time.Duration;
+import org.joda.time.Hours;
 import org.joda.time.Minutes;
 import org.joda.time.chrono.GregorianChronology;
 import org.joda.time.field.DividedDateTimeField;
@@ -109,73 +110,16 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
     @Override
     public void calculateAggregates() {
         Keyspace keyspace = HFactory.createKeyspace(keyspaceName, cluster);
-//
-//        SliceQuery<String,Composite, Integer> metricsQueueQuery = HFactory.createSliceQuery(keyspace,
-//            StringSerializer.get(), new CompositeSerializer().get(), IntegerSerializer.get());
-//        metricsQueueQuery.setColumnFamily(metricsQueueCF);
-//        metricsQueueQuery.setKey(oneHourMetricsDataCF);
-//
-//        ColumnSliceIterator<String, Composite, Integer> queueIterator =
-//            new ColumnSliceIterator<String, Composite, Integer>(metricsQueueQuery, (Composite) null, (Composite) null,
-//                false);
-//
-//        Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
-//
-//        while (queueIterator.hasNext()) {
-//            HColumn<Composite, Integer> column = queueIterator.next();
-//            Integer scheduleId = column.getName().get(1, IntegerSerializer.get());
-//            Long timestamp = column.getName().get(0, LongSerializer.get());
-//            DateTime startTime = new DateTime(timestamp);
-//            DateTime endTime = new DateTime(timestamp).plusHours(1);
-//
-//            SliceQuery<Integer, Long, Double> rawMetricsQuery = HFactory.createSliceQuery(keyspace,
-//                IntegerSerializer.get(), LongSerializer.get(), DoubleSerializer.get());
-//            rawMetricsQuery.setColumnFamily(rawMetricsDataCF);
-//            rawMetricsQuery.setKey(scheduleId);
-//
-//            ColumnSliceIterator<Integer, Long, Double> sliceIterator = new ColumnSliceIterator<Integer, Long, Double>(
-//                rawMetricsQuery, startTime.getMillis(), endTime.getMillis(), false);
-//            sliceIterator.hasNext();
-//            HColumn<Long, Double> rawColumn = sliceIterator.next();
-//            double min = rawColumn.getValue();
-//            double max = min;
-//            double sum = max;
-//            int count = 1;
-//
-//            while (sliceIterator.hasNext()) {
-//                rawColumn = sliceIterator.next();
-//                if (rawColumn.getValue() < min) {
-//                    min = rawColumn.getValue();
-//                } else if (rawColumn.getValue() > max) {
-//                    max = rawColumn.getValue();
-//                }
-//                sum += rawColumn.getValue();
-//                ++count;
-//            }
-//
-//            double avg = sum / count;
-//
-//            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createAvgColumn(startTime, avg));
-//            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMaxColumn(startTime, max));
-//            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMinColumn(startTime, min));
-//
-//            Set<Integer> scheduleIds = new HashSet<Integer>();
-//            scheduleIds.add(scheduleId);
-//            updateMetricsQueue(keyspace, sixHourMetricsDataCF, get6HourTimeSlice(startTime).getMillis(), scheduleIds);
-//        }
-
-        //mutator.execute();
 
         Map<Integer, DateTime> updatedSchedules = aggregateRawData(keyspace);
         updateMetricsQueue(keyspace, sixHourMetricsDataCF, updatedSchedules);
 
-        // We need to check the 6 hour column family to see if there is data yet for each
-        // schedule. If there is no data for a schedule, we need to add the schedule to the
-        // 6 hour queue so that the 6 hour bucket is seeded for that schedule.
-
         updatedSchedules = calculateAggregates(keyspace, oneHourMetricsDataCF, sixHourMetricsDataCF,
             Minutes.minutes(60 * 6));
-        updateMetricsQueue(keyspace, sixHourMetricsDataCF, updatedSchedules);
+        updateMetricsQueue(keyspace, twentyFourHourMetricsDataCF, updatedSchedules);
+
+        calculateAggregates(keyspace, sixHourMetricsDataCF, twentyFourHourMetricsDataCF,
+            Hours.hours(24).toStandardMinutes());
     }
 
     private Map<Integer, DateTime> aggregateRawData(Keyspace keyspace) {
@@ -191,6 +135,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
                 false);
 
         Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
+        Mutator<String> queueMutator = HFactory.createMutator(keyspace, StringSerializer.get());
 
         while (queueIterator.hasNext()) {
             HColumn<Composite, Integer> queueColumn = queueIterator.next();
@@ -233,8 +178,12 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
             mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMinColumn(startTime, min));
 
             updatedSchedules.put(scheduleId, startTime);
+
+            queueMutator.addDeletion(oneHourMetricsDataCF, metricsQueueCF, queueColumn.getName(),
+                CompositeSerializer.get());
         }
         mutator.execute();
+        queueMutator.execute();
 
         return updatedSchedules;
     }
@@ -256,6 +205,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
                 false);
 
         Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
+        Mutator<String> queueMutator = HFactory.createMutator(keyspace, StringSerializer.get());
 
         while (queueIterator.hasNext()) {
             HColumn<Composite, Integer> queueColumn = queueIterator.next();
@@ -325,8 +275,11 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
             mutator.addInsertion(scheduleId, toColumnFamily, createMinColumn(startTime, min));
 
             updatedSchedules.put(scheduleId, startTime);
+
+            queueMutator.addDeletion(toColumnFamily, metricsQueueCF, queueColumn.getName(), CompositeSerializer.get());
         }
         mutator.execute();
+        queueMutator.execute();
 
         return updatedSchedules;
     }
@@ -370,6 +323,8 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
             return dateTime.hourOfDay().roundFloorCopy();
         } else if (columnFamily.equals(sixHourMetricsDataCF)) {
             return get6HourTimeSlice(dateTime);
+        } else if (columnFamily.equals(twentyFourHourMetricsDataCF)) {
+            return get24HourTimeSlice(dateTime);
         } else {
             throw new IllegalArgumentException(columnFamily + " is not yet supported");
         }
@@ -379,6 +334,15 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         Chronology chronology = GregorianChronology.getInstance();
         DateTimeField hourField = chronology.hourOfDay();
         DividedDateTimeField dividedField = new DividedDateTimeField(hourField, DateTimeFieldType.clockhourOfDay(), 6);
+        long timestamp = dividedField.roundFloor(dateTime.getMillis());
+
+        return new DateTime(timestamp);
+    }
+
+    private DateTime get24HourTimeSlice(DateTime dateTime) {
+        Chronology chronology = GregorianChronology.getInstance();
+        DateTimeField hourField = chronology.hourOfDay();
+        DividedDateTimeField dividedField = new DividedDateTimeField(hourField, DateTimeFieldType.clockhourOfDay(), 24);
         long timestamp = dividedField.roundFloor(dateTime.getMillis());
 
         return new DateTime(timestamp);
