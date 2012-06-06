@@ -403,8 +403,8 @@ public class CassandraMetricsPluginComponentTest {
             create24HourColumn(hour0, AggregateType.AVG, (avg1 + avg2) / 2)
         ));
 
-        // verify that the 6 queue is updated
-        assert6HourMetricsQueueEmpty(scheduleId);
+        // verify that the 24 hour queue is updated
+        assert24HourMetricsQueueEmpty(scheduleId);
     }
 
     private HColumn<Long, Double> createRawDataColumn(DateTime timestamp, double value) {
