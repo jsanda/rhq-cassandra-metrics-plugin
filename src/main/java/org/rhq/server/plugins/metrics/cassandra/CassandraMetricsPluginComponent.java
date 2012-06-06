@@ -59,6 +59,12 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
     static final int SEVEN_DAYS = Duration.standardDays(7).toStandardSeconds().getSeconds();
 
+    static final int TWO_WEEKS = Duration.standardDays(14).toStandardSeconds().getSeconds();
+
+    static final int ONE_MONTH = Duration.standardDays(31).toStandardSeconds().getSeconds();
+
+    static final int ONE_YEAR = Duration.standardDays(365).toStandardSeconds().getSeconds();
+
     @Override
     public void initialize(ServerPluginContext serverPluginContext) throws Exception {
         Configuration pluginConfig = serverPluginContext.getPluginConfiguration();
@@ -115,11 +121,11 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         updateMetricsQueue(keyspace, sixHourMetricsDataCF, updatedSchedules);
 
         updatedSchedules = calculateAggregates(keyspace, oneHourMetricsDataCF, sixHourMetricsDataCF,
-            Minutes.minutes(60 * 6));
+            Minutes.minutes(60 * 6), ONE_MONTH);
         updateMetricsQueue(keyspace, twentyFourHourMetricsDataCF, updatedSchedules);
 
         calculateAggregates(keyspace, sixHourMetricsDataCF, twentyFourHourMetricsDataCF,
-            Hours.hours(24).toStandardMinutes());
+            Hours.hours(24).toStandardMinutes(), ONE_YEAR);
     }
 
     private Map<Integer, DateTime> aggregateRawData(Keyspace keyspace) {
@@ -173,9 +179,9 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
             double avg = sum / count;
 
-            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createAvgColumn(startTime, avg));
-            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMaxColumn(startTime, max));
-            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMinColumn(startTime, min));
+            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createAvgColumn(startTime, avg, TWO_WEEKS));
+            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMaxColumn(startTime, max, TWO_WEEKS));
+            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMinColumn(startTime, min, TWO_WEEKS));
 
             updatedSchedules.put(scheduleId, startTime);
 
@@ -189,7 +195,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
     }
 
     private Map<Integer, DateTime> calculateAggregates(Keyspace keyspace, String fromColumnFamily,
-        String toColumnFamily, Minutes interval) {
+        String toColumnFamily, Minutes interval, int ttl) {
         DateTime currentHour = getCurrentHour();
         DateTimeComparator dateTimeComparator = DateTimeComparator.getInstance();
 
@@ -270,9 +276,9 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
             double avg = sum / avgCount;
 
-            mutator.addInsertion(scheduleId, toColumnFamily, createAvgColumn(startTime, avg));
-            mutator.addInsertion(scheduleId, toColumnFamily, createMaxColumn(startTime, max));
-            mutator.addInsertion(scheduleId, toColumnFamily, createMinColumn(startTime, min));
+            mutator.addInsertion(scheduleId, toColumnFamily, createAvgColumn(startTime, avg, ttl));
+            mutator.addInsertion(scheduleId, toColumnFamily, createMaxColumn(startTime, max, ttl));
+            mutator.addInsertion(scheduleId, toColumnFamily, createMinColumn(startTime, min, ttl));
 
             updatedSchedules.put(scheduleId, startTime);
 
@@ -348,23 +354,24 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         return new DateTime(timestamp);
     }
 
-    private HColumn<Composite, Double> createAvgColumn(DateTime timestamp, double value) {
-        return createAggregateColumn(AggregateType.AVG, timestamp, value);
+    private HColumn<Composite, Double> createAvgColumn(DateTime timestamp, double value, int ttl) {
+        return createAggregateColumn(AggregateType.AVG, timestamp, value, ttl);
     }
 
-    private HColumn<Composite, Double> createMaxColumn(DateTime timestamp, double value) {
-        return createAggregateColumn(AggregateType.MAX, timestamp, value);
+    private HColumn<Composite, Double> createMaxColumn(DateTime timestamp, double value, int ttl) {
+        return createAggregateColumn(AggregateType.MAX, timestamp, value, ttl);
     }
 
-    private HColumn<Composite, Double> createMinColumn(DateTime timestamp, double value) {
-        return createAggregateColumn(AggregateType.MIN, timestamp, value);
+    private HColumn<Composite, Double> createMinColumn(DateTime timestamp, double value, int ttl) {
+        return createAggregateColumn(AggregateType.MIN, timestamp, value, ttl);
     }
 
-    private HColumn<Composite, Double> createAggregateColumn(AggregateType type, DateTime timestamp, double value) {
+    private HColumn<Composite, Double> createAggregateColumn(AggregateType type, DateTime timestamp, double value,
+        int ttl) {
         Composite composite = new Composite();
         composite.addComponent(timestamp.getMillis(), LongSerializer.get());
         composite.addComponent(type.ordinal(), IntegerSerializer.get());
-        return HFactory.createColumn(composite, value);
+        return HFactory.createColumn(composite, value, ttl, CompositeSerializer.get(), DoubleSerializer.get());
     }
 
     protected DateTime getCurrentHour() {
