@@ -1,6 +1,8 @@
 package org.rhq.server.plugins.metrics.cassandra;
 
 import static java.util.Arrays.asList;
+import static org.rhq.server.plugins.metrics.cassandra.CassandraMetricsPluginComponent.ONE_MONTH;
+import static org.rhq.server.plugins.metrics.cassandra.CassandraMetricsPluginComponent.ONE_YEAR;
 import static org.rhq.server.plugins.metrics.cassandra.CassandraMetricsPluginComponent.SEVEN_DAYS;
 import static org.rhq.server.plugins.metrics.cassandra.CassandraMetricsPluginComponent.TWO_WEEKS;
 import static org.rhq.test.AssertUtils.assertPropertiesMatch;
@@ -202,7 +204,7 @@ public class CassandraMetricsPluginComponentTest {
     }
 
     @Test
-    public void aggregate1HourDataAt9thHourWhenDBIsEmpty() {
+    public void aggregateRawDataDuring9thHourWhenDBIsEmpty() {
         int scheduleId = 123;
 
         purgeDB(scheduleId);
@@ -243,7 +245,7 @@ public class CassandraMetricsPluginComponentTest {
         metricsServer.setCurrentHour(hour9);
         metricsServer.calculateAggregates();
 
-        // very that the 1 hour aggregates are calculated
+        // verify that the 1 hour aggregates are calculated
 
         // The ttl for 1 hour data is 14 days.
         int ttl = TWO_WEEKS;
@@ -279,10 +281,75 @@ public class CassandraMetricsPluginComponentTest {
         assert1HourMetricsQueueEmpty(scheduleId);
     }
 
-//    @Test
-//    public void aggregate6HourDataAt12thHour() {
-//
-//    }
+    @Test
+    public void aggregate1HourDataDuring12thHour() {
+        // set up the test fixture
+        int scheduleId = 123;
+
+        purgeDB(scheduleId);
+
+        DateTime now = new DateTime();
+        DateTime hour0 = now.hourOfDay().roundFloorCopy().minusHours(now.hourOfDay().get());
+        DateTime hour12 = hour0.plusHours(12);
+        DateTime hour6 = hour0.plusHours(6);
+        DateTime hour7 = hour0.plusHours(7);
+        DateTime hour8 = hour0.plusHours(8);
+
+        double min1 = 1.1;
+        double avg1 = 2.2;
+        double max1 = 3.3;
+
+        double min2 = 4.4;
+        double avg2 = 5.5;
+        double max2 = 6.6;
+
+        // insert one hour data to be aggregated
+        Mutator<Integer> oneHourMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
+        oneHourMutator.addInsertion(scheduleId, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(hour7, AggregateType.MAX,
+            max1));
+        oneHourMutator.addInsertion(scheduleId, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(hour7, AggregateType.MIN,
+            min1));
+        oneHourMutator.addInsertion(scheduleId, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(hour7, AggregateType.AVG,
+            avg1));
+        oneHourMutator.addInsertion(scheduleId, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(hour8, AggregateType.MIN,
+            min2));
+        oneHourMutator.addInsertion(scheduleId, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(hour8, AggregateType.MAX,
+            max2));
+        oneHourMutator.addInsertion(scheduleId, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(hour8, AggregateType.AVG,
+            avg2));
+        oneHourMutator.execute();
+
+        // update the 6 hour queue
+        Mutator<String> queueMutator = HFactory.createMutator(keyspace, StringSerializer.get());
+        Composite key = createQueueColumnName(hour6, scheduleId);
+        HColumn<Composite, Integer> sixHourQueueColumn = HFactory.createColumn(key, 0, CompositeSerializer.get(),
+            IntegerSerializer.get());
+        queueMutator.addInsertion(SIX_HOUR_METRIC_DATA_CF, METRICS_WORK_QUEUE_CF, sixHourQueueColumn);
+
+        queueMutator.execute();
+
+        // execute the system under test
+        metricsServer.setCurrentHour(hour12);
+        metricsServer.calculateAggregates();
+
+        // verify the results
+        // verify that the one hour data has been aggregated
+        assert6HourDataEquals(scheduleId, asList(
+            create6HourColumn(hour6, AggregateType.MAX, max2),
+            create6HourColumn(hour6, AggregateType.MIN, min1),
+            create6HourColumn(hour6, AggregateType.AVG, (avg1 + avg2 / 2))
+        ));
+
+        // verify that the 6 hour queue has been updated
+        assert6HourMetricsQueueEmpty(scheduleId);
+
+        // verify that the 24 hour queue is updated
+        assert24HourMetricsQueueEquals(asList(HFactory.createColumn(createQueueColumnName(hour0, scheduleId), 0,
+            CompositeSerializer.get(), IntegerSerializer.get())));
+
+        // verify that 6 hour data is not rolled up into the 24 hour bucket
+        assert24HourDataEmpty(scheduleId);
+    }
 
     private HColumn<Long, Double> createRawDataColumn(DateTime timestamp, double value) {
         return HFactory.createColumn(timestamp.getMillis(), value, SEVEN_DAYS, LongSerializer.get(),
@@ -588,6 +655,21 @@ public class CassandraMetricsPluginComponentTest {
     private AggregateType getAggregateType(Composite composite) {
         Integer type = composite.get(1, IntegerSerializer.get());
         return AggregateType.valueOf(type);
+    }
+
+    private HColumn<Composite, Double> create1HourColumn(DateTime dateTime, AggregateType type, double value) {
+        return HFactory.createColumn(createAggregateKey(dateTime, type), value, TWO_WEEKS, CompositeSerializer.get(),
+            DoubleSerializer.get());
+    }
+
+    private HColumn<Composite, Double> create6HourColumn(DateTime dateTime, AggregateType type, double value) {
+        return HFactory.createColumn(createAggregateKey(dateTime, type), value, ONE_MONTH, CompositeSerializer.get(),
+            DoubleSerializer.get());
+    }
+
+    private HColumn<Composite, Double> create24HourColumn(DateTime dateTime, AggregateType type, double value) {
+        return HFactory.createColumn(createAggregateKey(dateTime, type), value, ONE_YEAR, CompositeSerializer.get(),
+            DoubleSerializer.get());
     }
 
     private Composite createAggregateKey(DateTime dateTime, AggregateType type) {
