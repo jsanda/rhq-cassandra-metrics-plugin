@@ -1,4 +1,5 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/maven-v4_0_0.xsd">
 
   <modelVersion>4.0.0</modelVersion>
 
@@ -19,12 +20,12 @@
   </properties>
 
   <dependencies>
-    <dependency> 
+    <dependency>
       <groupId>org.rhq</groupId>
       <artifactId>rhq-core-domain</artifactId>
       <version>${rhq.version}</version>
       <scope>provided</scope>
-    </dependency> 
+    </dependency>
 
     <dependency>
       <groupId>org.rhq</groupId>
@@ -66,13 +67,13 @@
     <dependency>
       <groupId>org.apache.cassandra</groupId>
       <artifactId>cassandra-all</artifactId>
-      <version>1.1.0</version> 
+      <version>1.1.0</version>
     </dependency>
 
     <dependency>
       <groupId>org.apache.thrift</groupId>
       <artifactId>libthrift</artifactId>
-      <version>0.6.1</version> 
+      <version>0.6.1</version>
     </dependency>
 
     <dependency>
@@ -81,5 +82,53 @@
       <version>2.1</version>
     </dependency>
   </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <artifactId>maven-dependency-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>copy-libs</id>
+            <phase>process-resources</phase>
+            <goals>
+              <goal>copy</goal>
+            </goals>
+            <configuration>
+              <artifactItems>
+                <artifactItem>
+                  <groupId>me.prettyprint</groupId>
+                  <artifactId>hector-core</artifactId>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>org.apache.cassandra</groupId>
+                  <artifactId>cassandra-all</artifactId>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>org.apache.thrift</groupId>
+                  <artifactId>libthrift</artifactId>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>joda-time</groupId>
+                  <artifactId>joda-time</artifactId>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>org.slf4j</groupId>
+                  <artifactId>slf4j-api</artifactId>
+                  <version>1.6.0</version>
+                </artifactItem>
+                <artifactItem>
+                  <groupId>org.apache.cassandra</groupId>
+                  <artifactId>cassandra-thrift</artifactId>
+                  <version>1.0.9</version>
+                </artifactItem>
+              </artifactItems>
+              <outputDirectory>${project.build.outputDirectory}/lib</outputDirectory>
+            </configuration>
+          </execution>
+        </executions>
+      </plugin>
+    </plugins>
+  </build>
 
 </project>

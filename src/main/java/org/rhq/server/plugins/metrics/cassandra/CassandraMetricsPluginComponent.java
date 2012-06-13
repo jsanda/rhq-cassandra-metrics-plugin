@@ -16,9 +16,13 @@ import org.joda.time.Minutes;
 import org.joda.time.chrono.GregorianChronology;
 import org.joda.time.field.DividedDateTimeField;
 
+import org.rhq.core.domain.auth.Subject;
 import org.rhq.core.domain.configuration.Configuration;
+import org.rhq.core.domain.criteria.MeasurementDataTraitCriteria;
 import org.rhq.core.domain.measurement.MeasurementDataNumeric;
 import org.rhq.core.domain.measurement.MeasurementReport;
+import org.rhq.core.domain.measurement.TraitMeasurement;
+import org.rhq.core.domain.util.PageList;
 import org.rhq.enterprise.server.plugin.pc.ServerPluginComponent;
 import org.rhq.enterprise.server.plugin.pc.ServerPluginContext;
 import org.rhq.enterprise.server.plugin.pc.metrics.MetricsServerPluginFacet;
@@ -57,6 +61,10 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
     private String metricsQueueCF;
 
+    private String traitsCF;
+
+    private String resourceTraitsCF;
+
     static final int SEVEN_DAYS = Duration.standardDays(7).toStandardSeconds().getSeconds();
 
     static final int TWO_WEEKS = Duration.standardDays(14).toStandardSeconds().getSeconds();
@@ -77,6 +85,8 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         sixHourMetricsDataCF = pluginConfig.getSimpleValue("sixHourMetricsColumnFamily");
         twentyFourHourMetricsDataCF = pluginConfig.getSimpleValue("twentyFourHourMetricsColumnFamily");
         metricsQueueCF = pluginConfig.getSimpleValue("metricsQueueColumnFamily");
+        traitsCF = pluginConfig.getSimpleValue("traitsColumnFamily");
+        resourceTraitsCF = pluginConfig.getSimpleValue("resourceTraitsColumnFamily");
     }
 
     @Override
@@ -89,6 +99,13 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
     @Override
     public void shutdown() {
+    }
+
+
+    @Override
+    public PageList<? extends TraitMeasurement> findTraitsByCriteria(Subject subject,
+        MeasurementDataTraitCriteria measurementDataTraitCriteria) {
+        return null;
     }
 
     @Override

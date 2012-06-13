@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<metrics-plugin
+    version="1.0.3"
+    apiVersion="1.0"
+    description="Cassandra database backed metrics server plugin"
+    displayName="Metrics: (Cassandra) Metrics server plugin"
+    name="metrics-cassandra"
+    package="org.rhq.server.plugins.metrics.cassandra"
+    xmlns="urn:xmlns:rhq-serverplugin.metrics"
+    xmlns:serverplugin="urn:xmlns:rhq-serverplugin"
+    xmlns:c="urn:xmlns:rhq-configuration"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+
+  <serverplugin:plugin-component class="CassandraMetricsPluginComponent"/>
+
+  <serverplugin:plugin-configuration>
+    <c:simple-property name="clusterName" displayName="Cluster" required="true" default="rhq"/>
+    <c:simple-property name="hostIP" required="true" default="localhost:9160"/>
+    <c:simple-property name="keyspace" required="true" default="rhq"/>
+    <c:simple-property name="rawMetricsColumnFamily" displayName="Raw metric data column family" required="true"
+                       default="raw_metrics"/>
+    <c:simple-property name="oneHourMetricsColumnFamily" displayName="1 hour metric data column family" required="true"
+                       default="one_hour_metric_data"/>
+    <c:simple-property name="sixHourMetricsColumnFamily" displayName="6 hour metric data column family" required="true"
+                       default="six_hour_metric_data"/>
+    <c:simple-property name="twentyFourHourMetricsColumnFamily" displayName="24 hour metric data column family"
+                       required="true" default="twenty_four_hour_metric_data"/>
+    <c:simple-property name="metricsQueueColumnFamily" displayName="Metric data queue column family"
+                       required="true" default="metrics_work_queue"/>
+  </serverplugin:plugin-configuration>
+
+</metrics-plugin>

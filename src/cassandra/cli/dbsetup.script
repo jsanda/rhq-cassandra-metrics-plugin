@@ -30,3 +30,12 @@ create column family metrics_work_queue
     default_validation_class = Int32Type and
     key_validation_class = UTF8Type;
 
+create column family resource_traits
+    with comparator = 'CompositeType(DateType, Int32Type, Int32Type, UTF8Type, UTF8Type)' and
+    default_validation_class = UTF8Type and
+    key_validation_class = Int32Type;
+
+create column family traits
+    with comparator = DateType and
+    default_validation_class = UTF8Type and
+    key_validation_class = Int32Type;

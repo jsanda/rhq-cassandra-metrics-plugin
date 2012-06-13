@@ -65,6 +65,10 @@ public class CassandraMetricsPluginComponentTest {
 
     private final String METRICS_WORK_QUEUE_CF = "metrics_work_queue";
 
+    private final String TRAITS_CF = "traits";
+
+    private final String RESOURCE_TRAITS_CF = "resource_traits";
+
     private CassandraMetricsPluginComponentStub metricsServer;
 
     private Keyspace keyspace;
@@ -93,13 +97,13 @@ public class CassandraMetricsPluginComponentTest {
 
         metricsServer = new CassandraMetricsPluginComponentStub();
         metricsServer.initialize(createTestContext());
+
+        purgeDB();
     }
 
     @Test
     public void insertMultipleRawNumericDataForOneSchedule() {
         int scheduleId = 123;
-
-        purgeDB(scheduleId);
 
         DateTime now = new DateTime();
         DateTime threeMinutesAgo = now.minusMinutes(3);
@@ -159,8 +163,6 @@ public class CassandraMetricsPluginComponentTest {
     public void calculateAggregatesForOneScheduleWhenDBIsEmpty() {
         int scheduleId = 123;
 
-        purgeDB(scheduleId);
-
         DateTime now = new DateTime();
         DateTime lastHour = now.hourOfDay().roundFloorCopy().minusHours(1);
         DateTime firstMetricTime = lastHour.plusMinutes(5);
@@ -206,8 +208,6 @@ public class CassandraMetricsPluginComponentTest {
     @Test
     public void aggregateRawDataDuring9thHour() {
         int scheduleId = 123;
-
-        purgeDB(scheduleId);
 
         DateTime now = new DateTime();
         DateTime hour0 = now.hourOfDay().roundFloorCopy().minusHours(now.hourOfDay().get());
@@ -280,8 +280,6 @@ public class CassandraMetricsPluginComponentTest {
         // set up the test fixture
         int scheduleId = 123;
 
-        purgeDB(scheduleId);
-
         DateTime now = new DateTime();
         DateTime hour0 = now.hourOfDay().roundFloorCopy().minusHours(now.hourOfDay().get());
         DateTime hour12 = hour0.plusHours(12);
@@ -350,8 +348,6 @@ public class CassandraMetricsPluginComponentTest {
         // set up the test fixture
         int scheduleId = 123;
 
-        purgeDB(scheduleId);
-
         DateTime now = new DateTime();
         DateTime hour0 = now.hourOfDay().roundFloorCopy().minusHours(now.hourOfDay().get());
         DateTime hour12 = hour0.plusHours(12);
@@ -416,8 +412,6 @@ public class CassandraMetricsPluginComponentTest {
     public void getMaxColumn() {
         int scheduleId = 123;
 
-        purgeDB(scheduleId);
-
         DateTime now = new DateTime();
         DateTime lastHour = now.hourOfDay().roundFloorCopy().minusHours(1);
         DateTime firstMetricTime = lastHour.plusMinutes(5);
@@ -448,6 +442,43 @@ public class CassandraMetricsPluginComponentTest {
         QueryResult<ColumnSlice<Long, Double>> result = query.execute();
         ColumnSlice<Long, Double> slice = result.get();
         List<HColumn<Long, Double>> columns = slice.getColumns();
+    }
+
+    @Test
+    public void deleteAllRows() {
+        DateTime now = new DateTime();
+
+        Mutator<Integer> oneHourMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
+        oneHourMutator.addInsertion(111, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.MAX,
+            1.0));
+        oneHourMutator.addInsertion(112, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.MIN,
+            1.0));
+        oneHourMutator.addInsertion(113, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.AVG,
+            1.0));
+        oneHourMutator.addInsertion(114, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.MIN,
+            1.0));
+        oneHourMutator.addInsertion(115, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.MAX,
+            1.0));
+        oneHourMutator.addInsertion(116, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.AVG,
+            1.0));
+        oneHourMutator.execute();
+
+//        KeyIterator<Integer> keyIterator = new KeyIterator<Integer>(keyspace, ONE_HOUR_METRIC_DATA_CF,
+//            IntegerSerializer.get(), 2);
+//
+//        Mutator<Integer> rowMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
+//        rowMutator.addDeletion(keyIterator, ONE_HOUR_METRIC_DATA_CF);
+//
+//        rowMutator.execute();
+        DAO dao = new DAO(keyspace);
+        dao.deleteAllRows(ONE_HOUR_METRIC_DATA_CF, IntegerSerializer.get());
+
+        assertMetricDataEmpty(111, ONE_HOUR_METRIC_DATA_CF);
+        assertMetricDataEmpty(112, ONE_HOUR_METRIC_DATA_CF);
+        assertMetricDataEmpty(113, ONE_HOUR_METRIC_DATA_CF);
+        assertMetricDataEmpty(114, ONE_HOUR_METRIC_DATA_CF);
+        assertMetricDataEmpty(115, ONE_HOUR_METRIC_DATA_CF);
+        assertMetricDataEmpty(116, ONE_HOUR_METRIC_DATA_CF);
     }
 
 //    @Test
@@ -494,16 +525,15 @@ public class CassandraMetricsPluginComponentTest {
 //        ));
 //    }
 
-    private void purgeDB(List<Integer> scheduleIds) {
-        purgeDB(scheduleIds.toArray(new Integer[scheduleIds.size()]));
-    }
-
-    private void purgeDB(Integer... scheduleIds) {
-        purgeQueue();
-        purgeNumericMetricsCF(RAW_METRIC_DATA_CF, scheduleIds);
-        purgeNumericMetricsCF(ONE_HOUR_METRIC_DATA_CF, scheduleIds);
-        purgeNumericMetricsCF(SIX_HOUR_METRIC_DATA_CF, scheduleIds);
-        purgeNumericMetricsCF(TWENTY_FOUR_HOUR_METRIC_DATA_CF, scheduleIds);
+    private void purgeDB() {
+        DAO dao = new DAO(keyspace);
+        dao.deleteAllRows(METRICS_WORK_QUEUE_CF, StringSerializer.get());
+        dao.deleteAllRows(RAW_METRIC_DATA_CF, IntegerSerializer.get());
+        dao.deleteAllRows(ONE_HOUR_METRIC_DATA_CF, IntegerSerializer.get());
+        dao.deleteAllRows(SIX_HOUR_METRIC_DATA_CF, IntegerSerializer.get());
+        dao.deleteAllRows(TWENTY_FOUR_HOUR_METRIC_DATA_CF, IntegerSerializer.get());
+        dao.deleteAllRows(TRAITS_CF, IntegerSerializer.get());
+        dao.deleteAllRows(RESOURCE_TRAITS_CF, IntegerSerializer.get());
     }
 
     private void purgeQueue() {
@@ -532,6 +562,8 @@ public class CassandraMetricsPluginComponentTest {
         configuration.put(new PropertySimple("sixHourMetricsColumnFamily", SIX_HOUR_METRIC_DATA_CF));
         configuration.put(new PropertySimple("twentyFourHourMetricsColumnFamily", TWENTY_FOUR_HOUR_METRIC_DATA_CF));
         configuration.put(new PropertySimple("metricsQueueColumnFamily", METRICS_WORK_QUEUE_CF));
+        configuration.put(new PropertySimple("traitsColumnFamily", TRAITS_CF));
+        configuration.put(new PropertySimple("resourceTraitsColumnFamily", RESOURCE_TRAITS_CF));
 
         return new ServerPluginContext(null, null, null, configuration, null);
     }
