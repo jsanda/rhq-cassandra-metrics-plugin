@@ -20,6 +20,7 @@ import org.rhq.core.domain.auth.Subject;
 import org.rhq.core.domain.configuration.Configuration;
 import org.rhq.core.domain.criteria.MeasurementDataTraitCriteria;
 import org.rhq.core.domain.measurement.MeasurementDataNumeric;
+import org.rhq.core.domain.measurement.MeasurementDataTrait;
 import org.rhq.core.domain.measurement.MeasurementReport;
 import org.rhq.core.domain.measurement.TraitMeasurement;
 import org.rhq.core.domain.util.PageList;
@@ -113,6 +114,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         Keyspace keyspace = HFactory.createKeyspace(keyspaceName, cluster);
 
         insertNumericData(keyspace, measurementReport.getNumericData(), measurementReport.getCollectionTime());
+        insertTraitData(keyspace, measurementReport.getTraitData(), measurementReport.getCollectionTime());
     }
 
     private void insertNumericData(Keyspace keyspace, Set<MeasurementDataNumeric> dataSet, long collectionTime) {
@@ -128,6 +130,17 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         mutator.execute();
 
         updateMetricsQueue(keyspace, oneHourMetricsDataCF, collectionTime, scheduleIds);
+    }
+
+    private void insertTraitData(Keyspace keyspace, Set<MeasurementDataTrait> dataSet, long collectionTime) {
+        Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
+
+        for (MeasurementDataTrait trait : dataSet) {
+            mutator.addInsertion(trait.getScheduleId(), traitsCF, HFactory.createColumn(trait.getTimestamp(),
+                trait.getValue(), ONE_YEAR, LongSerializer.get(), StringSerializer.get()));
+        }
+
+        mutator.execute();
     }
 
     @Override

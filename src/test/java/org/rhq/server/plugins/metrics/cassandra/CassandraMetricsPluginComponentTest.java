@@ -26,6 +26,7 @@ import org.rhq.core.domain.configuration.Configuration;
 import org.rhq.core.domain.configuration.PropertySimple;
 import org.rhq.core.domain.measurement.DataType;
 import org.rhq.core.domain.measurement.MeasurementDataNumeric;
+import org.rhq.core.domain.measurement.MeasurementDataTrait;
 import org.rhq.core.domain.measurement.MeasurementReport;
 import org.rhq.core.domain.measurement.MeasurementScheduleRequest;
 import org.rhq.enterprise.server.plugin.pc.ServerPluginContext;
@@ -157,6 +158,36 @@ public class CassandraMetricsPluginComponentTest {
 
         assert1HourMetricsQueueEquals(asList(HFactory.createColumn(expectedComposite, 0, CompositeSerializer.get(),
             IntegerSerializer.get())));
+    }
+
+    @Test
+    public void insertTraits() {
+        DateTime now = new DateTime();
+        boolean enabled = true;
+        DataType dataType = DataType.TRAIT;
+        long interval = MINUTE * 10;
+
+        int schedule1Id = 123;
+        String schedule1Name = "TRAIT_1";
+        String value1 = "running";
+        MeasurementScheduleRequest request1 = new MeasurementScheduleRequest(schedule1Id, schedule1Name, interval,
+            enabled, dataType);
+
+//        int schedule2Id = 456;
+//        String schedule2Name = "TRAIT_2";
+//        String value2 = "linux";
+//        MeasurementScheduleRequest request2 = new MeasurementScheduleRequest()
+
+        MeasurementReport report = new MeasurementReport();
+        report.addData(new MeasurementDataTrait(now.minusMinutes(2).getMillis(), request1, value1));
+        report.setCollectionTime(now.getMillis());
+
+        metricsServer.insertMetrics(report);
+
+        List<HColumn<Long, String>> expected = asList(HFactory.createColumn(now.minusMinutes(2).getMillis(), value1,
+            ONE_YEAR, LongSerializer.get(), StringSerializer.get()));
+
+        assertTraitDataEquals(schedule1Id, expected);
     }
 
     //@Test
@@ -693,6 +724,26 @@ public class CassandraMetricsPluginComponentTest {
             assertEquals(getAggregateType(actualColumn.getName()), getAggregateType(expectedColumn.getName()),
                 prefix + " The column data type does not match the expected value");
             assertEquals(actualColumn.getTtl(), expectedColumn.getTtl(), "The ttl for the column is wrong.");
+        }
+    }
+
+    private void assertTraitDataEquals(int scheduleId, List<HColumn<Long, String>> expected) {
+        SliceQuery<Integer, Long, String> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
+            LongSerializer.get(), StringSerializer.get());
+        query.setColumnFamily(TRAITS_CF);
+        query.setKey(scheduleId);
+
+        ColumnSliceIterator<Integer, Long, String> iterator = new ColumnSliceIterator<Integer, Long, String>(query,
+            (Long) null, (Long) null, false);
+
+        List<HColumn<Long, String>> actual = new ArrayList<HColumn<Long, String>>();
+        while (iterator.hasNext()) {
+            actual.add(iterator.next());
+        }
+
+        assertEquals(actual.size(), expected.size(), "The number of columns in the " + TRAITS_CF + " CF do not match");
+        for (int i = 0; i < expected.size(); ++i) {
+            assertPropertiesMatch("The returned columns do not match", expected.get(i), actual.get(i), "clock");
         }
     }
 
