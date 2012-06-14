@@ -25,6 +25,7 @@ import org.testng.annotations.Test;
 import org.rhq.core.domain.configuration.Configuration;
 import org.rhq.core.domain.configuration.PropertySimple;
 import org.rhq.core.domain.measurement.DataType;
+import org.rhq.core.domain.measurement.DisplayType;
 import org.rhq.core.domain.measurement.MeasurementDataNumeric;
 import org.rhq.core.domain.measurement.MeasurementDataTrait;
 import org.rhq.core.domain.measurement.MeasurementReport;
@@ -35,10 +36,12 @@ import me.prettyprint.cassandra.serializers.CompositeSerializer;
 import me.prettyprint.cassandra.serializers.DoubleSerializer;
 import me.prettyprint.cassandra.serializers.IntegerSerializer;
 import me.prettyprint.cassandra.serializers.LongSerializer;
+import me.prettyprint.cassandra.serializers.SerializerTypeInferer;
 import me.prettyprint.cassandra.serializers.StringSerializer;
 import me.prettyprint.cassandra.service.ColumnSliceIterator;
 import me.prettyprint.hector.api.Cluster;
 import me.prettyprint.hector.api.Keyspace;
+import me.prettyprint.hector.api.Serializer;
 import me.prettyprint.hector.api.beans.ColumnSlice;
 import me.prettyprint.hector.api.beans.Composite;
 import me.prettyprint.hector.api.beans.HColumn;
@@ -167,27 +170,49 @@ public class CassandraMetricsPluginComponentTest {
         DataType dataType = DataType.TRAIT;
         long interval = MINUTE * 10;
 
-        int schedule1Id = 123;
+        int scheduleId = 123;
+        int definitionId = 456;
+        int resourceId = 789;
         String schedule1Name = "TRAIT_1";
         String value1 = "running";
-        MeasurementScheduleRequest request1 = new MeasurementScheduleRequest(schedule1Id, schedule1Name, interval,
-            enabled, dataType);
-
-//        int schedule2Id = 456;
-//        String schedule2Name = "TRAIT_2";
-//        String value2 = "linux";
-//        MeasurementScheduleRequest request2 = new MeasurementScheduleRequest()
+        String value2 = "stopped";
+        DisplayType displayType = DisplayType.DETAIL;
+        String displayName = "Trait 1";
+        MeasurementScheduleRequest request = new MeasurementScheduleRequest(scheduleId, schedule1Name, interval,
+            enabled, dataType, null, displayType, displayName, definitionId, resourceId);
 
         MeasurementReport report = new MeasurementReport();
-        report.addData(new MeasurementDataTrait(now.minusMinutes(2).getMillis(), request1, value1));
+        report.addData(new MeasurementDataTrait(now.minusMinutes(12).getMillis(), request, value2));
+        report.addData(new MeasurementDataTrait(now.minusMinutes(2).getMillis(), request, value1));
         report.setCollectionTime(now.getMillis());
 
         metricsServer.insertMetrics(report);
 
-        List<HColumn<Long, String>> expected = asList(HFactory.createColumn(now.minusMinutes(2).getMillis(), value1,
-            ONE_YEAR, LongSerializer.get(), StringSerializer.get()));
+        List<HColumn<Long, String>> expected = asList(
+            createTraitColumn(now.minusMinutes(12), value2),
+            createTraitColumn(now.minusMinutes(2), value1)
+        );
 
-        assertTraitDataEquals(schedule1Id, expected);
+        assertTraitDataEquals(scheduleId, expected);
+
+        Composite name1 = new Composite();
+        name1.addComponent(now.minusMinutes(12).getMillis(), LongSerializer.get());
+        name1.addComponent(scheduleId, IntegerSerializer.get());
+        name1.addComponent(definitionId, IntegerSerializer.get());
+        name1.addComponent(displayType.ordinal(), IntegerSerializer.get());
+        name1.addComponent(displayName, StringSerializer.get());
+
+        Composite name2 = new Composite();
+        name2.addComponent(now.minusMinutes(2).getMillis(), LongSerializer.get());
+        name2.addComponent(scheduleId, IntegerSerializer.get());
+        name2.addComponent(definitionId, IntegerSerializer.get());
+        name2.addComponent(displayType.ordinal(), IntegerSerializer.get());
+        name2.addComponent(displayName, StringSerializer.get());
+
+        List<HColumn<Composite, String>> expectedIndex = asList(HFactory.createColumn(name1, value2),
+            HFactory.createColumn(name2, value1));
+
+        assertResourceTraitIndexEquals(resourceId, expectedIndex);
     }
 
     //@Test
@@ -320,7 +345,8 @@ public class CassandraMetricsPluginComponentTest {
 
         double min1 = 1.1;
         double avg1 = 2.2;
-        double max1 = 3.3;
+        //double max1 = 3.3;
+        double max1 = 9.9;
 
         double min2 = 4.4;
         double avg2 = 5.5;
@@ -334,10 +360,10 @@ public class CassandraMetricsPluginComponentTest {
             min1));
         oneHourMutator.addInsertion(scheduleId, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(hour7, AggregateType.AVG,
             avg1));
-        oneHourMutator.addInsertion(scheduleId, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(hour8, AggregateType.MIN,
-            min2));
         oneHourMutator.addInsertion(scheduleId, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(hour8, AggregateType.MAX,
             max2));
+        oneHourMutator.addInsertion(scheduleId, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(hour8, AggregateType.MIN,
+            min2));
         oneHourMutator.addInsertion(scheduleId, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(hour8, AggregateType.AVG,
             avg2));
         oneHourMutator.execute();
@@ -358,9 +384,9 @@ public class CassandraMetricsPluginComponentTest {
         // verify the results
         // verify that the one hour data has been aggregated
         assert6HourDataEquals(scheduleId, asList(
-            create6HourColumn(hour6, AggregateType.MAX, max2),
+            create6HourColumn(hour6, AggregateType.MAX, max1),
             create6HourColumn(hour6, AggregateType.MIN, min1),
-            create6HourColumn(hour6, AggregateType.AVG, (avg1 + avg2 / 2))
+            create6HourColumn(hour6, AggregateType.AVG, (avg1 + avg2) / 2)
         ));
 
         // verify that the 6 hour queue has been updated
@@ -426,7 +452,7 @@ public class CassandraMetricsPluginComponentTest {
         // verify that the 6 hour data is aggregated
         assert24HourDataEquals(scheduleId, asList(
             create24HourColumn(hour0, AggregateType.MAX, max2),
-            create24HourColumn(hour0, AggregateType.MIN, min2),
+            create24HourColumn(hour0, AggregateType.MIN, min1),
             create24HourColumn(hour0, AggregateType.AVG, (avg1 + avg2) / 2)
         ));
 
@@ -723,6 +749,7 @@ public class CassandraMetricsPluginComponentTest {
                 prefix + " The timestamp does not match the expected value.");
             assertEquals(getAggregateType(actualColumn.getName()), getAggregateType(expectedColumn.getName()),
                 prefix + " The column data type does not match the expected value");
+            assertEquals(actualColumn.getValue(), expectedColumn.getValue(), "The column value is wrong");
             assertEquals(actualColumn.getTtl(), expectedColumn.getTtl(), "The ttl for the column is wrong.");
         }
     }
@@ -744,6 +771,52 @@ public class CassandraMetricsPluginComponentTest {
         assertEquals(actual.size(), expected.size(), "The number of columns in the " + TRAITS_CF + " CF do not match");
         for (int i = 0; i < expected.size(); ++i) {
             assertPropertiesMatch("The returned columns do not match", expected.get(i), actual.get(i), "clock");
+        }
+    }
+
+    private void assertResourceTraitIndexEquals(int resourceId, List<HColumn<Composite, String>> expected) {
+        SliceQuery<Integer, Composite, String> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
+            CompositeSerializer.get(), StringSerializer.get());
+        query.setColumnFamily(RESOURCE_TRAITS_CF);
+        query.setKey(resourceId);
+
+        ColumnSliceIterator<Integer, Composite, String> iterator = new ColumnSliceIterator<Integer, Composite, String>(
+            query, (Composite) null, (Composite) null, false);
+
+        List<HColumn<Composite, String>> actual = new ArrayList<HColumn<Composite, String>>();
+        while (iterator.hasNext()) {
+            actual.add(iterator.next());
+        }
+
+        assertEquals(actual.size(), expected.size(), "The number of columns in " + RESOURCE_TRAITS_CF +
+            " do not match for resource id " + resourceId);
+        int i = 0;
+        for (HColumn<Composite, String> expectedColumn : expected) {
+            HColumn<Composite, String> actualColumn = actual.get(i++);
+            Composite expectedName = expectedColumn.getName();
+            Composite actualName = actualColumn.getName();
+
+            // check timestamp
+            assertEquals(get(actualName, 0, Long.class), get(expectedName, 0, Long.class), "The timestamp is wrong");
+
+            // check schedule id
+            assertEquals(get(actualName, 1, Integer.class), get(expectedName, 1, Integer.class),
+                "The schedule id is wrong");
+
+            // check definition id
+            assertEquals(get(actualName, 2, Integer.class), get(expectedName, 2, Integer.class),
+                "The definition id is wrong");
+
+            // check the display type
+            assertEquals(get(actualName, 3, Integer.class), get(expectedName, 3, Integer.class),
+                "The display type is wrong");
+
+            // check the display name
+            assertEquals(get(actualName, 4, String.class), get(expectedName, 4, String.class),
+                "The display name is wrong");
+
+            // check the value
+            assertEquals(actualColumn.getValue(), expectedColumn.getValue(), "The value is wrong");
         }
     }
 
@@ -791,9 +864,19 @@ public class CassandraMetricsPluginComponentTest {
         return composite.get(1, IntegerSerializer.get());
     }
 
+    private <T> T get(Composite composite, int index, Class<T> serializerType) {
+        Serializer<T> serializer = SerializerTypeInferer.getSerializer(serializerType);
+        return composite.get(index, serializer);
+    }
+
     private AggregateType getAggregateType(Composite composite) {
         Integer type = composite.get(1, IntegerSerializer.get());
         return AggregateType.valueOf(type);
+    }
+
+    private HColumn<Long, String> createTraitColumn(DateTime dateTime, String value) {
+        return HFactory.createColumn(dateTime.getMillis(), value, ONE_YEAR, LongSerializer.get(),
+            StringSerializer.get());
     }
 
     private HColumn<Composite, Double> create1HourColumn(DateTime dateTime, AggregateType type, double value) {

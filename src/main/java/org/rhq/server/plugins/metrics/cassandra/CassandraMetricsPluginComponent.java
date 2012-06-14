@@ -134,13 +134,25 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
     private void insertTraitData(Keyspace keyspace, Set<MeasurementDataTrait> dataSet, long collectionTime) {
         Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
+        Mutator<Integer> indexMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
 
         for (MeasurementDataTrait trait : dataSet) {
             mutator.addInsertion(trait.getScheduleId(), traitsCF, HFactory.createColumn(trait.getTimestamp(),
                 trait.getValue(), ONE_YEAR, LongSerializer.get(), StringSerializer.get()));
+
+            Composite composite = new Composite();
+            composite.addComponent(trait.getTimestamp(), LongSerializer.get());
+            composite.addComponent(trait.getScheduleId(), IntegerSerializer.get());
+            composite.addComponent(trait.getDefinitionId(), IntegerSerializer.get());
+            composite.addComponent(trait.getDisplayType().ordinal(), IntegerSerializer.get());
+            composite.addComponent(trait.getDisplayName(), StringSerializer.get());
+
+            indexMutator.addInsertion(trait.getResourceId(), resourceTraitsCF, HFactory.createColumn(composite,
+                trait.getValue(), CompositeSerializer.get(), StringSerializer.get()));
         }
 
         mutator.execute();
+        indexMutator.execute();
     }
 
     @Override
@@ -270,7 +282,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
                     false);
             fromColumnFamilyIterator.hasNext();
 
-            HColumn<Composite, Double> fromColumn = fromColumnFamilyIterator.next();
+            HColumn<Composite, Double> fromColumn = null;
             double min = 0;
             double max = 0;
             double sum = 0;
@@ -290,16 +302,18 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
                     case MIN:
                         if (minCount == 0) {
                             min = fromColumn.getValue();
-                        } else if (min < fromColumn.getValue()) {
+                        } else if (fromColumn.getValue() < min) {
                             min = fromColumn.getValue();
                         }
+                        minCount++;
                         break;
                     case MAX:
                         if (maxCount == 0) {
                             max = fromColumn.getValue();
-                        } else if (max > fromColumn.getValue()) {
+                        } else if (fromColumn.getValue() > max) {
                             max = fromColumn.getValue();
                         }
+                        maxCount++;
                         break;
                 }
             }
