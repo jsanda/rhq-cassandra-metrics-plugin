@@ -55,6 +55,8 @@ import me.prettyprint.hector.api.query.SliceQuery;
  */
 public class CassandraMetricsPluginComponentTest {
 
+    private static final boolean ENABLED = true;
+
     private final long SECOND = 1000;
 
     private final long MINUTE = 60 * SECOND;
@@ -105,7 +107,7 @@ public class CassandraMetricsPluginComponentTest {
         purgeDB();
     }
 
-    @Test
+    @Test(enabled = ENABLED)
     public void insertMultipleRawNumericDataForOneSchedule() {
         int scheduleId = 123;
 
@@ -127,7 +129,6 @@ public class CassandraMetricsPluginComponentTest {
         report.addData(new MeasurementDataNumeric(threeMinutesAgo.getMillis(), request, 3.2));
         report.addData(new MeasurementDataNumeric(twoMinutesAgo.getMillis(), request, 3.9));
         report.addData(new MeasurementDataNumeric(oneMinuteAgo.getMillis(), request, 2.6));
-        report.setCollectionTime(now.getMillis());
 
         metricsServer.insertMetrics(report);
 
@@ -163,7 +164,7 @@ public class CassandraMetricsPluginComponentTest {
             IntegerSerializer.get())));
     }
 
-    @Test
+    @Test(enabled = ENABLED)
     public void insertTraits() {
         DateTime now = new DateTime();
         boolean enabled = true;
@@ -261,7 +262,7 @@ public class CassandraMetricsPluginComponentTest {
         assert6HourDataEquals(scheduleId, expected6HourData);
     }
 
-    @Test
+    @Test(enabled = ENABLED)
     public void aggregateRawDataDuring9thHour() {
         int scheduleId = 123;
 
@@ -331,7 +332,7 @@ public class CassandraMetricsPluginComponentTest {
         assert1HourMetricsQueueEmpty(scheduleId);
     }
 
-    @Test
+    @Test(enabled = ENABLED)
     public void aggregate1HourDataDuring12thHour() {
         // set up the test fixture
         int scheduleId = 123;
@@ -400,7 +401,7 @@ public class CassandraMetricsPluginComponentTest {
         assert24HourDataEmpty(scheduleId);
     }
 
-    @Test
+    @Test(enabled = ENABLED)
     public void aggregate6HourDataDuring24thHour() {
         // set up the test fixture
         int scheduleId = 123;
@@ -464,123 +465,6 @@ public class CassandraMetricsPluginComponentTest {
         return HFactory.createColumn(timestamp.getMillis(), value, SEVEN_DAYS, LongSerializer.get(),
             DoubleSerializer.get());
     }
-
-    @Test
-    public void getMaxColumn() {
-        int scheduleId = 123;
-
-        DateTime now = new DateTime();
-        DateTime lastHour = now.hourOfDay().roundFloorCopy().minusHours(1);
-        DateTime firstMetricTime = lastHour.plusMinutes(5);
-        DateTime secondMetricTime = lastHour.plusMinutes(10);
-        DateTime thirdMetricTime = lastHour.plusMinutes(15);
-
-        String scheduleName = getClass().getName() + "_SCHEDULE";
-        long interval = MINUTE * 15;
-        boolean enabled = true;
-        DataType dataType = DataType.MEASUREMENT;
-        MeasurementScheduleRequest request = new MeasurementScheduleRequest(scheduleId, scheduleName, interval,
-            enabled, dataType);
-
-        MeasurementReport report = new MeasurementReport();
-        report.addData(new MeasurementDataNumeric(firstMetricTime.getMillis(), request, 3.2));
-        report.addData(new MeasurementDataNumeric(secondMetricTime.getMillis(), request, 3.9));
-        report.addData(new MeasurementDataNumeric(thirdMetricTime.getMillis(), request, 2.6));
-        report.setCollectionTime(thirdMetricTime.plusMillis(500).getMillis());
-
-        metricsServer.insertMetrics(report);
-
-        SliceQuery<Integer, Long, Double> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
-            LongSerializer.get(), DoubleSerializer.get());
-        query.setColumnFamily(RAW_METRIC_DATA_CF);
-        query.setKey(scheduleId);
-        query.setRange((Long) null, (Long) null, true, 1);
-
-        QueryResult<ColumnSlice<Long, Double>> result = query.execute();
-        ColumnSlice<Long, Double> slice = result.get();
-        List<HColumn<Long, Double>> columns = slice.getColumns();
-    }
-
-    @Test
-    public void deleteAllRows() {
-        DateTime now = new DateTime();
-
-        Mutator<Integer> oneHourMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
-        oneHourMutator.addInsertion(111, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.MAX,
-            1.0));
-        oneHourMutator.addInsertion(112, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.MIN,
-            1.0));
-        oneHourMutator.addInsertion(113, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.AVG,
-            1.0));
-        oneHourMutator.addInsertion(114, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.MIN,
-            1.0));
-        oneHourMutator.addInsertion(115, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.MAX,
-            1.0));
-        oneHourMutator.addInsertion(116, ONE_HOUR_METRIC_DATA_CF, create1HourColumn(now, AggregateType.AVG,
-            1.0));
-        oneHourMutator.execute();
-
-//        KeyIterator<Integer> keyIterator = new KeyIterator<Integer>(keyspace, ONE_HOUR_METRIC_DATA_CF,
-//            IntegerSerializer.get(), 2);
-//
-//        Mutator<Integer> rowMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
-//        rowMutator.addDeletion(keyIterator, ONE_HOUR_METRIC_DATA_CF);
-//
-//        rowMutator.execute();
-        DAO dao = new DAO(keyspace);
-        dao.deleteAllRows(ONE_HOUR_METRIC_DATA_CF, IntegerSerializer.get());
-
-        assertMetricDataEmpty(111, ONE_HOUR_METRIC_DATA_CF);
-        assertMetricDataEmpty(112, ONE_HOUR_METRIC_DATA_CF);
-        assertMetricDataEmpty(113, ONE_HOUR_METRIC_DATA_CF);
-        assertMetricDataEmpty(114, ONE_HOUR_METRIC_DATA_CF);
-        assertMetricDataEmpty(115, ONE_HOUR_METRIC_DATA_CF);
-        assertMetricDataEmpty(116, ONE_HOUR_METRIC_DATA_CF);
-    }
-
-//    @Test
-//    public void calculateOneHourAggregatesForMultipleSchedules() {
-//        List<Integer> scheduleIds = asList(123, 456);
-//        List<String> scheduleNames = asList(getClass().getName() + "_SCHEDULE1", getClass().getName() + "SCHEDULE2");
-//        long interval = MINUTE * 15;
-//        boolean enabled = true;
-//        DataType dataType = DataType.MEASUREMENT;
-//
-//        List<MeasurementScheduleRequest> requests = asList(
-//            new MeasurementScheduleRequest(scheduleIds.get(0), scheduleNames.get(0), interval, enabled, dataType),
-//            new MeasurementScheduleRequest(scheduleIds.get(1), scheduleNames.get(1), interval, enabled, dataType));
-//
-//        purgeDB(scheduleIds);
-//
-//        DateTime now = new DateTime();
-//        DateTime lastHour = now.hourOfDay().roundFloorCopy().minusHours(1);
-//        DateTime firstMetricTime = lastHour.plusMinutes(5);
-//        DateTime secondMetricTime = lastHour.plusMinutes(10);
-//        DateTime thirdMetricTime = lastHour.plusMinutes(15);
-//
-//        MeasurementReport report = new MeasurementReport();
-//        report.addData(new MeasurementDataNumeric(firstMetricTime.getMillis(), requests.get(0), 1.1));
-//        report.addData(new MeasurementDataNumeric(secondMetricTime.getMillis(), requests.get(0), 2.2));
-//        report.addData(new MeasurementDataNumeric(thirdMetricTime.getMillis(), requests.get(0), 3.3));
-//        report.addData(new MeasurementDataNumeric(firstMetricTime.getMillis(), requests.get(1), 4.4));
-//        report.addData(new MeasurementDataNumeric(secondMetricTime.getMillis(), requests.get(1), 5.5));
-//        report.addData(new MeasurementDataNumeric(thirdMetricTime.getMillis(), requests.get(1), 6.6));
-//        report.setCollectionTime(thirdMetricTime.plusMillis(10).getMillis());
-//
-//        metricsServer.insertMetrics(report);
-//        metricsServer.calculateAggregates();
-//
-//        assert1HourDataEquals(scheduleIds.get(0), asList(
-//            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MAX), 3.3),
-//            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MIN), 1.1),
-//            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.AVG), (1.1 + 2.2 + 3.3) / 3)
-//        ));
-//        assert1HourDataEquals(scheduleIds.get(1), asList(
-//            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MAX), 6.6),
-//            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.MIN), 4.4),
-//            HFactory.createColumn(createAggregateKey(lastHour, AggregateType.AVG), (4.4 + 5.5 + 6.6) / 3)
-//        ));
-//    }
 
     private void purgeDB() {
         DAO dao = new DAO(keyspace);

@@ -28,6 +28,10 @@
                        required="true" default="twenty_four_hour_metric_data"/>
     <c:simple-property name="metricsQueueColumnFamily" displayName="Metric data queue column family"
                        required="true" default="metrics_work_queue"/>
+    <c:simple-property name="traitsColumnFamily" displayName="Trait metrics column family"
+                       required="true" default="traits"/>
+    <c:simple-property name="resourceTraitsColumnFamily" displayName="Resource Traits index column family"
+                       required="true" default="resource_traits"/>
   </serverplugin:plugin-configuration>
 
 </metrics-plugin>

@@ -3,7 +3,6 @@ package org.rhq.server.plugins.metrics.cassandra;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
-import java.util.TreeSet;
 
 import org.joda.time.Chronology;
 import org.joda.time.DateTime;
@@ -18,11 +17,13 @@ import org.joda.time.field.DividedDateTimeField;
 
 import org.rhq.core.domain.auth.Subject;
 import org.rhq.core.domain.configuration.Configuration;
-import org.rhq.core.domain.criteria.MeasurementDataTraitCriteria;
+import org.rhq.core.domain.criteria.TraitMeasurementCriteria;
+import org.rhq.core.domain.measurement.DisplayType;
 import org.rhq.core.domain.measurement.MeasurementDataNumeric;
 import org.rhq.core.domain.measurement.MeasurementDataTrait;
 import org.rhq.core.domain.measurement.MeasurementReport;
 import org.rhq.core.domain.measurement.TraitMeasurement;
+import org.rhq.core.domain.measurement.TraitMeasurementDTO;
 import org.rhq.core.domain.util.PageList;
 import org.rhq.enterprise.server.plugin.pc.ServerPluginComponent;
 import org.rhq.enterprise.server.plugin.pc.ServerPluginContext;
@@ -66,6 +67,8 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
     private String resourceTraitsCF;
 
+    private Keyspace keyspace;
+
     static final int SEVEN_DAYS = Duration.standardDays(7).toStandardSeconds().getSeconds();
 
     static final int TWO_WEEKS = Duration.standardDays(14).toStandardSeconds().getSeconds();
@@ -88,6 +91,8 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         metricsQueueCF = pluginConfig.getSimpleValue("metricsQueueColumnFamily");
         traitsCF = pluginConfig.getSimpleValue("traitsColumnFamily");
         resourceTraitsCF = pluginConfig.getSimpleValue("resourceTraitsColumnFamily");
+
+        keyspace = HFactory.createKeyspace(keyspaceName, cluster);
     }
 
     @Override
@@ -105,34 +110,65 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
     @Override
     public PageList<? extends TraitMeasurement> findTraitsByCriteria(Subject subject,
-        MeasurementDataTraitCriteria measurementDataTraitCriteria) {
-        return null;
+        TraitMeasurementCriteria criteria) {
+
+
+        SliceQuery<Integer, Composite, String> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
+            CompositeSerializer.get(), StringSerializer.get());
+        query.setColumnFamily(resourceTraitsCF);
+        query.setKey(criteria.getFilterResourceId());
+
+        ColumnSliceIterator<Integer, Composite, String> iterator = new ColumnSliceIterator<Integer, Composite, String>(
+            query, (Composite) null, (Composite) null, false);
+        PageList<TraitMeasurementDTO> traits = new PageList<TraitMeasurementDTO>();
+
+        while (iterator.hasNext()) {
+            HColumn<Composite, String> column = iterator.next();
+            Composite columnName = column.getName();
+
+            TraitMeasurementDTO trait = new TraitMeasurementDTO();
+            trait.setResourceId(criteria.getFilterResourceId());
+            trait.setValue(column.getValue());
+            trait.setTimestamp(columnName.get(0, LongSerializer.get()));
+            trait.setScheduleId(columnName.get(1, IntegerSerializer.get()));
+            trait.setDefinitionId(columnName.get(2, IntegerSerializer.get()));
+
+            if (columnName.get(3, IntegerSerializer.get()) == 0) {
+                trait.setDisplayType(DisplayType.SUMMARY);
+            } else {
+                trait.setDisplayType(DisplayType.DETAIL);
+            }
+
+            trait.setDisplayName(columnName.get(4, StringSerializer.get()));
+
+            traits.add(trait);
+        }
+
+        return traits;
     }
 
     @Override
     public void insertMetrics(MeasurementReport measurementReport) {
-        Keyspace keyspace = HFactory.createKeyspace(keyspaceName, cluster);
-
-        insertNumericData(keyspace, measurementReport.getNumericData(), measurementReport.getCollectionTime());
-        insertTraitData(keyspace, measurementReport.getTraitData(), measurementReport.getCollectionTime());
+        insertNumericData(measurementReport.getNumericData(), measurementReport.getCollectionTime());
+        insertTraitData(measurementReport.getTraitData(), measurementReport.getCollectionTime());
     }
 
-    private void insertNumericData(Keyspace keyspace, Set<MeasurementDataNumeric> dataSet, long collectionTime) {
-        Set<Integer> scheduleIds = new TreeSet<Integer>();
+    private void insertNumericData(Set<MeasurementDataNumeric> dataSet, long collectionTime) {
+        Map<Integer, DateTime> updates = new TreeMap<Integer, DateTime>();
         Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
 
         for (MeasurementDataNumeric data : dataSet) {
-            scheduleIds.add(data.getScheduleId());
+            updates.put(data.getScheduleId(), new DateTime(data.getTimestamp()).hourOfDay().roundFloorCopy());
             mutator.addInsertion(data.getScheduleId(), rawMetricsDataCF, HFactory.createColumn(
                 data.getTimestamp(), data.getValue(), SEVEN_DAYS, LongSerializer.get(), DoubleSerializer.get()));
         }
 
         mutator.execute();
 
-        updateMetricsQueue(keyspace, oneHourMetricsDataCF, collectionTime, scheduleIds);
+        updateMetricsQueue(oneHourMetricsDataCF, updates);
     }
 
-    private void insertTraitData(Keyspace keyspace, Set<MeasurementDataTrait> dataSet, long collectionTime) {
+    private void insertTraitData(Set<MeasurementDataTrait> dataSet, long collectionTime) {
         Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
         Mutator<Integer> indexMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
 
@@ -157,20 +193,18 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
     @Override
     public void calculateAggregates() {
-        Keyspace keyspace = HFactory.createKeyspace(keyspaceName, cluster);
+        Map<Integer, DateTime> updatedSchedules = aggregateRawData();
+        updateMetricsQueue(sixHourMetricsDataCF, updatedSchedules);
 
-        Map<Integer, DateTime> updatedSchedules = aggregateRawData(keyspace);
-        updateMetricsQueue(keyspace, sixHourMetricsDataCF, updatedSchedules);
+        updatedSchedules = calculateAggregates(oneHourMetricsDataCF, sixHourMetricsDataCF,
+            Minutes.minutes(60 * 6), Hours.hours(24).toStandardMinutes(), ONE_MONTH);
+        updateMetricsQueue(twentyFourHourMetricsDataCF, updatedSchedules);
 
-        updatedSchedules = calculateAggregates(keyspace, oneHourMetricsDataCF, sixHourMetricsDataCF,
-            Minutes.minutes(60 * 6), ONE_MONTH);
-        updateMetricsQueue(keyspace, twentyFourHourMetricsDataCF, updatedSchedules);
-
-        calculateAggregates(keyspace, sixHourMetricsDataCF, twentyFourHourMetricsDataCF,
-            Hours.hours(24).toStandardMinutes(), ONE_YEAR);
+        calculateAggregates(sixHourMetricsDataCF, twentyFourHourMetricsDataCF,
+            Hours.hours(24).toStandardMinutes(), Hours.hours(24).toStandardMinutes(), ONE_YEAR);
     }
 
-    private Map<Integer, DateTime> aggregateRawData(Keyspace keyspace) {
+    private Map<Integer, DateTime> aggregateRawData() {
         Map<Integer, DateTime> updatedSchedules = new TreeMap<Integer, DateTime>();
 
         SliceQuery<String,Composite, Integer> queueQuery = HFactory.createSliceQuery(keyspace,
@@ -225,7 +259,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
             mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMaxColumn(startTime, max, TWO_WEEKS));
             mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMinColumn(startTime, min, TWO_WEEKS));
 
-            updatedSchedules.put(scheduleId, startTime);
+            updatedSchedules.put(scheduleId, getTimeSlice(startTime, Minutes.minutes(60 * 6)));
 
             queueMutator.addDeletion(oneHourMetricsDataCF, metricsQueueCF, queueColumn.getName(),
                 CompositeSerializer.get());
@@ -236,8 +270,8 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         return updatedSchedules;
     }
 
-    private Map<Integer, DateTime> calculateAggregates(Keyspace keyspace, String fromColumnFamily,
-        String toColumnFamily, Minutes interval, int ttl) {
+    private Map<Integer, DateTime> calculateAggregates(String fromColumnFamily, String toColumnFamily, Minutes interval,
+        Minutes nextInterval, int ttl) {
         DateTime currentHour = getCurrentHour();
         DateTimeComparator dateTimeComparator = DateTimeComparator.getInstance();
 
@@ -324,7 +358,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
             mutator.addInsertion(scheduleId, toColumnFamily, createMaxColumn(startTime, max, ttl));
             mutator.addInsertion(scheduleId, toColumnFamily, createMinColumn(startTime, min, ttl));
 
-            updatedSchedules.put(scheduleId, startTime);
+            updatedSchedules.put(scheduleId, getTimeSlice(startTime, nextInterval));
 
             queueMutator.addDeletion(toColumnFamily, metricsQueueCF, queueColumn.getName(), CompositeSerializer.get());
         }
@@ -334,14 +368,14 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         return updatedSchedules;
     }
 
-    private MutationResult updateMetricsQueue(Keyspace keyspace, String columnFamily, long collectionTime,
-        Set<Integer> scheduleIds) {
-        DateTime collectionHour = new DateTime(collectionTime).hourOfDay().roundFloorCopy();
+    private MutationResult updateMetricsQueue(String columnFamily, Map<Integer, DateTime> updates) {
         Mutator<String> mutator = HFactory.createMutator(keyspace, StringSerializer.get());
 
-        for (Integer scheduleId : scheduleIds) {
+        for (Integer scheduleId : updates.keySet()) {
+            DateTime collectionTime = new DateTime(updates.get(scheduleId));
+            //DateTime collectionHour = collectionTime.hourOfDay().roundFloorCopy();
             Composite composite = new Composite();
-            composite.addComponent(collectionHour.getMillis(), LongSerializer.get());
+            composite.addComponent(collectionTime.getMillis(), LongSerializer.get());
             composite.addComponent(scheduleId, IntegerSerializer.get());
             HColumn<Composite, Integer> column = HFactory.createColumn(composite, 0,
                 CompositeSerializer.get(), IntegerSerializer.get());
@@ -351,33 +385,31 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         return mutator.execute();
     }
 
-    private MutationResult updateMetricsQueue(Keyspace keyspace, String columnFamily,
-        Map<Integer, DateTime> updatedSchedules) {
-        Mutator<String> mutator = HFactory.createMutator(keyspace, StringSerializer.get());
+//    private MutationResult updateMetricsQueue(String columnFamily,
+//        Map<Integer, DateTime> updatedSchedules) {
+//        Mutator<String> mutator = HFactory.createMutator(keyspace, StringSerializer.get());
+//
+//        for (Integer scheduleId : updatedSchedules.keySet()) {
+//            Composite composite = new Composite();
+//            DateTime timeSlice = getTimeSlice(columnFamily, updatedSchedules.get(scheduleId));
+//            composite.addComponent(timeSlice.getMillis(), LongSerializer.get());
+//            composite.addComponent(scheduleId, IntegerSerializer.get());
+//            HColumn<Composite, Integer> column = HFactory.createColumn(composite, 0, CompositeSerializer.get(),
+//                IntegerSerializer.get());
+//            mutator.addInsertion(columnFamily, metricsQueueCF, column);
+//        }
+//
+//        return mutator.execute();
+//    }
 
-        for (Integer scheduleId : updatedSchedules.keySet()) {
-            Composite composite = new Composite();
-            DateTime timeSlice = getTimeSlice(columnFamily, updatedSchedules.get(scheduleId));
-            composite.addComponent(timeSlice.getMillis(), LongSerializer.get());
-            composite.addComponent(scheduleId, IntegerSerializer.get());
-            HColumn<Composite, Integer> column = HFactory.createColumn(composite, 0, CompositeSerializer.get(),
-                IntegerSerializer.get());
-            mutator.addInsertion(columnFamily, metricsQueueCF, column);
-        }
+    private DateTime getTimeSlice(DateTime dateTime, Minutes interval) {
+        Chronology chronology = GregorianChronology.getInstance();
+        DateTimeField hourField = chronology.hourOfDay();
+        DividedDateTimeField dividedField = new DividedDateTimeField(hourField, DateTimeFieldType.clockhourOfDay(),
+            interval.toStandardHours().getHours());
+        long timestamp = dividedField.roundFloor(dateTime.getMillis());
 
-        return mutator.execute();
-    }
-
-    private DateTime getTimeSlice(String columnFamily, DateTime dateTime) {
-        if (columnFamily.equals(oneHourMetricsDataCF)) {
-            return dateTime.hourOfDay().roundFloorCopy();
-        } else if (columnFamily.equals(sixHourMetricsDataCF)) {
-            return get6HourTimeSlice(dateTime);
-        } else if (columnFamily.equals(twentyFourHourMetricsDataCF)) {
-            return get24HourTimeSlice(dateTime);
-        } else {
-            throw new IllegalArgumentException(columnFamily + " is not yet supported");
-        }
+        return new DateTime(timestamp);
     }
 
     private DateTime get6HourTimeSlice(DateTime dateTime) {
