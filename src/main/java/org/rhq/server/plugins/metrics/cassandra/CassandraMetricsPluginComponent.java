@@ -1,29 +1,28 @@
 package org.rhq.server.plugins.metrics.cassandra;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 
-import org.joda.time.Chronology;
 import org.joda.time.DateTime;
 import org.joda.time.DateTimeComparator;
-import org.joda.time.DateTimeField;
-import org.joda.time.DateTimeFieldType;
-import org.joda.time.Duration;
 import org.joda.time.Hours;
 import org.joda.time.Minutes;
-import org.joda.time.chrono.GregorianChronology;
-import org.joda.time.field.DividedDateTimeField;
 
 import org.rhq.core.domain.auth.Subject;
+import org.rhq.core.domain.common.EntityContext;
 import org.rhq.core.domain.configuration.Configuration;
 import org.rhq.core.domain.criteria.TraitMeasurementCriteria;
 import org.rhq.core.domain.measurement.DisplayType;
 import org.rhq.core.domain.measurement.MeasurementDataNumeric;
 import org.rhq.core.domain.measurement.MeasurementDataTrait;
 import org.rhq.core.domain.measurement.MeasurementReport;
+import org.rhq.core.domain.measurement.MeasurementSchedule;
 import org.rhq.core.domain.measurement.TraitMeasurement;
 import org.rhq.core.domain.measurement.TraitMeasurementDTO;
+import org.rhq.core.domain.measurement.composite.MeasurementDataNumericHighLowComposite;
 import org.rhq.core.domain.util.PageList;
 import org.rhq.enterprise.server.plugin.pc.ServerPluginComponent;
 import org.rhq.enterprise.server.plugin.pc.ServerPluginContext;
@@ -69,13 +68,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
     private Keyspace keyspace;
 
-    static final int SEVEN_DAYS = Duration.standardDays(7).toStandardSeconds().getSeconds();
-
-    static final int TWO_WEEKS = Duration.standardDays(14).toStandardSeconds().getSeconds();
-
-    static final int ONE_MONTH = Duration.standardDays(31).toStandardSeconds().getSeconds();
-
-    static final int ONE_YEAR = Duration.standardDays(365).toStandardSeconds().getSeconds();
+    private DateTimeService dateTimeService;
 
     @Override
     public void initialize(ServerPluginContext serverPluginContext) throws Exception {
@@ -93,6 +86,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         resourceTraitsCF = pluginConfig.getSimpleValue("resourceTraitsColumnFamily");
 
         keyspace = HFactory.createKeyspace(keyspaceName, cluster);
+        dateTimeService = new DateTimeService();
     }
 
     @Override
@@ -107,11 +101,44 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
     public void shutdown() {
     }
 
+    @Override
+    public List<MeasurementDataNumericHighLowComposite> findDataForContext(Subject subject, EntityContext entityContext,
+        MeasurementSchedule schedule, long beginTime, long endTime) {
+
+        SliceQuery<Integer, Long, Double> rawDataQuery = HFactory.createSliceQuery(keyspace,
+            IntegerSerializer.get(), LongSerializer.get(), DoubleSerializer.get());
+        rawDataQuery.setColumnFamily(rawMetricsDataCF);
+        rawDataQuery.setKey(schedule.getId());
+        rawDataQuery.setRange(beginTime, endTime, false, 2);
+
+        ColumnSliceIterator<Integer, Long, Double> rawDataIterator =
+            new ColumnSliceIterator<Integer, Long, Double>(rawDataQuery, beginTime, endTime, false);
+        Buckets buckets = new Buckets(beginTime, endTime);
+        HColumn<Long, Double> rawColumn = null;
+
+        while (rawDataIterator.hasNext()) {
+            rawColumn = rawDataIterator.next();
+            buckets.insert(rawColumn.getName(), rawColumn.getValue());
+        }
+
+        List<MeasurementDataNumericHighLowComposite> data = new ArrayList<MeasurementDataNumericHighLowComposite>();
+        for (int i = 0; i < buckets.getNumDataPoints(); ++i) {
+            Buckets.Bucket bucket = buckets.get(i);
+            data.add(new MeasurementDataNumericHighLowComposite(bucket.getStartTime(), bucket.getAvg(),
+                bucket.getMax(), bucket.getMin()));
+        }
+
+        return data;
+    }
+
+    @Override
+    public List<MeasurementDataNumeric> findRawData(Subject subject, int i, long l, long l1) {
+        return null;
+    }
 
     @Override
     public PageList<? extends TraitMeasurement> findTraitsByCriteria(Subject subject,
         TraitMeasurementCriteria criteria) {
-
 
         SliceQuery<Integer, Composite, String> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
             CompositeSerializer.get(), StringSerializer.get());
@@ -160,7 +187,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         for (MeasurementDataNumeric data : dataSet) {
             updates.put(data.getScheduleId(), new DateTime(data.getTimestamp()).hourOfDay().roundFloorCopy());
             mutator.addInsertion(data.getScheduleId(), rawMetricsDataCF, HFactory.createColumn(
-                data.getTimestamp(), data.getValue(), SEVEN_DAYS, LongSerializer.get(), DoubleSerializer.get()));
+                data.getTimestamp(), data.getValue(), DateTimeService.SEVEN_DAYS, LongSerializer.get(), DoubleSerializer.get()));
         }
 
         mutator.execute();
@@ -174,7 +201,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
         for (MeasurementDataTrait trait : dataSet) {
             mutator.addInsertion(trait.getScheduleId(), traitsCF, HFactory.createColumn(trait.getTimestamp(),
-                trait.getValue(), ONE_YEAR, LongSerializer.get(), StringSerializer.get()));
+                trait.getValue(), DateTimeService.ONE_YEAR, LongSerializer.get(), StringSerializer.get()));
 
             Composite composite = new Composite();
             composite.addComponent(trait.getTimestamp(), LongSerializer.get());
@@ -197,11 +224,11 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         updateMetricsQueue(sixHourMetricsDataCF, updatedSchedules);
 
         updatedSchedules = calculateAggregates(oneHourMetricsDataCF, sixHourMetricsDataCF,
-            Minutes.minutes(60 * 6), Hours.hours(24).toStandardMinutes(), ONE_MONTH);
+            Minutes.minutes(60 * 6), Hours.hours(24).toStandardMinutes(), DateTimeService.ONE_MONTH);
         updateMetricsQueue(twentyFourHourMetricsDataCF, updatedSchedules);
 
         calculateAggregates(sixHourMetricsDataCF, twentyFourHourMetricsDataCF,
-            Hours.hours(24).toStandardMinutes(), Hours.hours(24).toStandardMinutes(), ONE_YEAR);
+            Hours.hours(24).toStandardMinutes(), Hours.hours(24).toStandardMinutes(), DateTimeService.ONE_YEAR);
     }
 
     private Map<Integer, DateTime> aggregateRawData() {
@@ -255,11 +282,11 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
             double avg = sum / count;
 
-            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createAvgColumn(startTime, avg, TWO_WEEKS));
-            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMaxColumn(startTime, max, TWO_WEEKS));
-            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMinColumn(startTime, min, TWO_WEEKS));
+            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createAvgColumn(startTime, avg, DateTimeService.TWO_WEEKS));
+            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMaxColumn(startTime, max, DateTimeService.TWO_WEEKS));
+            mutator.addInsertion(scheduleId, oneHourMetricsDataCF, createMinColumn(startTime, min, DateTimeService.TWO_WEEKS));
 
-            updatedSchedules.put(scheduleId, getTimeSlice(startTime, Minutes.minutes(60 * 6)));
+            updatedSchedules.put(scheduleId, dateTimeService.getTimeSlice(startTime, Minutes.minutes(60 * 6)));
 
             queueMutator.addDeletion(oneHourMetricsDataCF, metricsQueueCF, queueColumn.getName(),
                 CompositeSerializer.get());
@@ -358,7 +385,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
             mutator.addInsertion(scheduleId, toColumnFamily, createMaxColumn(startTime, max, ttl));
             mutator.addInsertion(scheduleId, toColumnFamily, createMinColumn(startTime, min, ttl));
 
-            updatedSchedules.put(scheduleId, getTimeSlice(startTime, nextInterval));
+            updatedSchedules.put(scheduleId, dateTimeService.getTimeSlice(startTime, nextInterval));
 
             queueMutator.addDeletion(toColumnFamily, metricsQueueCF, queueColumn.getName(), CompositeSerializer.get());
         }
@@ -401,34 +428,6 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 //
 //        return mutator.execute();
 //    }
-
-    private DateTime getTimeSlice(DateTime dateTime, Minutes interval) {
-        Chronology chronology = GregorianChronology.getInstance();
-        DateTimeField hourField = chronology.hourOfDay();
-        DividedDateTimeField dividedField = new DividedDateTimeField(hourField, DateTimeFieldType.clockhourOfDay(),
-            interval.toStandardHours().getHours());
-        long timestamp = dividedField.roundFloor(dateTime.getMillis());
-
-        return new DateTime(timestamp);
-    }
-
-    private DateTime get6HourTimeSlice(DateTime dateTime) {
-        Chronology chronology = GregorianChronology.getInstance();
-        DateTimeField hourField = chronology.hourOfDay();
-        DividedDateTimeField dividedField = new DividedDateTimeField(hourField, DateTimeFieldType.clockhourOfDay(), 6);
-        long timestamp = dividedField.roundFloor(dateTime.getMillis());
-
-        return new DateTime(timestamp);
-    }
-
-    private DateTime get24HourTimeSlice(DateTime dateTime) {
-        Chronology chronology = GregorianChronology.getInstance();
-        DateTimeField hourField = chronology.hourOfDay();
-        DividedDateTimeField dividedField = new DividedDateTimeField(hourField, DateTimeFieldType.clockhourOfDay(), 24);
-        long timestamp = dividedField.roundFloor(dateTime.getMillis());
-
-        return new DateTime(timestamp);
-    }
 
     private HColumn<Composite, Double> createAvgColumn(DateTime timestamp, double value, int ttl) {
         return createAggregateColumn(AggregateType.AVG, timestamp, value, ttl);

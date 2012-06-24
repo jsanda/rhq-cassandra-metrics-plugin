@@ -1,10 +1,11 @@
 package org.rhq.server.plugins.metrics.cassandra;
 
 import static java.util.Arrays.asList;
-import static org.rhq.server.plugins.metrics.cassandra.CassandraMetricsPluginComponent.ONE_MONTH;
-import static org.rhq.server.plugins.metrics.cassandra.CassandraMetricsPluginComponent.ONE_YEAR;
-import static org.rhq.server.plugins.metrics.cassandra.CassandraMetricsPluginComponent.SEVEN_DAYS;
-import static org.rhq.server.plugins.metrics.cassandra.CassandraMetricsPluginComponent.TWO_WEEKS;
+import static org.joda.time.DateTime.now;
+import static org.rhq.server.plugins.metrics.cassandra.DateTimeService.ONE_MONTH;
+import static org.rhq.server.plugins.metrics.cassandra.DateTimeService.ONE_YEAR;
+import static org.rhq.server.plugins.metrics.cassandra.DateTimeService.SEVEN_DAYS;
+import static org.rhq.server.plugins.metrics.cassandra.DateTimeService.TWO_WEEKS;
 import static org.rhq.test.AssertUtils.assertPropertiesMatch;
 import static org.testng.Assert.assertEquals;
 
@@ -29,7 +30,9 @@ import org.rhq.core.domain.measurement.DisplayType;
 import org.rhq.core.domain.measurement.MeasurementDataNumeric;
 import org.rhq.core.domain.measurement.MeasurementDataTrait;
 import org.rhq.core.domain.measurement.MeasurementReport;
+import org.rhq.core.domain.measurement.MeasurementSchedule;
 import org.rhq.core.domain.measurement.MeasurementScheduleRequest;
+import org.rhq.core.domain.measurement.composite.MeasurementDataNumericHighLowComposite;
 import org.rhq.enterprise.server.plugin.pc.ServerPluginContext;
 
 import me.prettyprint.cassandra.serializers.CompositeSerializer;
@@ -105,6 +108,56 @@ public class CassandraMetricsPluginComponentTest {
         metricsServer.initialize(createTestContext());
 
         purgeDB();
+    }
+
+    @Test(enabled = ENABLED)
+    public void findRawNumericData() {
+        DateTime beginTime = now().minusHours(4);
+        DateTime endTime = now();
+
+        Buckets buckets = new Buckets(beginTime, endTime);
+
+        String scheduleName = getClass().getName() + "_SCHEDULE";
+        MeasurementSchedule schedule = new MeasurementSchedule();
+        schedule.setId(123);
+        long interval = MINUTE * 10;
+        boolean enabled = true;
+        DataType dataType = DataType.MEASUREMENT;
+        MeasurementScheduleRequest request = new MeasurementScheduleRequest(schedule.getId(), scheduleName, interval,
+            enabled, dataType);
+
+        MeasurementReport report = new MeasurementReport();
+        report.addData(new MeasurementDataNumeric(buckets.get(0).getStartTime() + 10, request, 1.1));
+        report.addData(new MeasurementDataNumeric(buckets.get(0).getStartTime() + 20, request, 2.2));
+        report.addData(new MeasurementDataNumeric(buckets.get(0).getStartTime() + 30, request, 3.3));
+        report.addData(new MeasurementDataNumeric(buckets.get(59).getStartTime() + 10, request, 4.4));
+        report.addData(new MeasurementDataNumeric(buckets.get(59).getStartTime() + 20, request, 5.5));
+        report.addData(new MeasurementDataNumeric(buckets.get(59).getStartTime() + 30, request, 6.6));
+
+        // add some data outside the range
+        report.addData(new MeasurementDataNumeric(buckets.get(0).getStartTime() - 100, request, 1.23));
+        report.addData(new MeasurementDataNumeric(buckets.get(59).getStartTime() + buckets.getInterval() + 50, request,
+            4.56));
+
+        metricsServer.insertMetrics(report);
+        List<MeasurementDataNumericHighLowComposite> actualData = metricsServer.findDataForContext(null, null,
+            schedule, beginTime.getMillis(), endTime.getMillis());
+
+        assertEquals(actualData.size(), buckets.getNumDataPoints(), "Expected to get back 60 data points.");
+
+        MeasurementDataNumericHighLowComposite expectedBucket0Data = new MeasurementDataNumericHighLowComposite(
+            buckets.get(0).getStartTime(), (1.1 + 2.2 + 3.3) / 3, 3.3, 1.1);
+        MeasurementDataNumericHighLowComposite expectedBucket59Data = new MeasurementDataNumericHighLowComposite(
+            buckets.get(59).getStartTime(), (4.4 + 5.5 + 6.6) / 3, 6.6, 4.4);
+        MeasurementDataNumericHighLowComposite expectedBucket29Data = new MeasurementDataNumericHighLowComposite(
+            buckets.get(29).getStartTime(), Double.NaN, Double.NaN, Double.NaN);
+
+        assertPropertiesMatch("The data for bucket 0 does not match the expected values.", expectedBucket0Data,
+            actualData.get(0));
+        assertPropertiesMatch("The data for bucket 59 does not match the expected values.", expectedBucket59Data,
+            actualData.get(59));
+        assertPropertiesMatch("The data for bucket 29 does not match the expected values.", expectedBucket29Data,
+            actualData.get(29));
     }
 
     @Test(enabled = ENABLED)
