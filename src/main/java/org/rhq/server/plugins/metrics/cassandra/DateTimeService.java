@@ -34,7 +34,11 @@ public class DateTimeService {
         return new DateTime(timestamp);
     }
 
-    public boolean isRawDataRange(DateTime dateTime) {
+    public boolean isInRawDataRange(DateTime dateTime) {
         return dateTimeComparator.compare(now().minusDays(7), dateTime) < 0;
+    }
+
+    public boolean isIn1HourDataRange(DateTime dateTime) {
+        return dateTimeComparator.compare(now().minusDays(14), dateTime) < 0;
     }
 }

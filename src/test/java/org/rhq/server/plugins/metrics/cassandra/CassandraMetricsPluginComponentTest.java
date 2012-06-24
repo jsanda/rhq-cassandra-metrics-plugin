@@ -111,7 +111,7 @@ public class CassandraMetricsPluginComponentTest {
     }
 
     @Test(enabled = ENABLED)
-    public void findRawNumericData() {
+    public void findRawDataComposites() {
         DateTime beginTime = now().minusHours(4);
         DateTime endTime = now();
 
@@ -158,6 +158,11 @@ public class CassandraMetricsPluginComponentTest {
             actualData.get(59));
         assertPropertiesMatch("The data for bucket 29 does not match the expected values.", expectedBucket29Data,
             actualData.get(29));
+    }
+
+    @Test(enabled = ENABLED)
+    public void find1HourDataComposites() {
+
     }
 
     @Test(enabled = ENABLED)
