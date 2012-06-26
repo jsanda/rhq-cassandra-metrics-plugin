@@ -117,7 +117,11 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         }
 
         if (dateTimeService.isIn1HourDataRange(begin)) {
-            return find1HourDataForContext(schedule, beginTime, endTime);
+            return findAggregateDataForContext(schedule, beginTime, endTime, oneHourMetricsDataCF);
+        }
+
+        if (dateTimeService.isIn6HourDataRnage(begin)) {
+            return findAggregateDataForContext(schedule, beginTime, endTime, sixHourMetricsDataCF);
         }
 
         return null;
@@ -150,8 +154,8 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         return data;
     }
 
-    private List<MeasurementDataNumericHighLowComposite> find1HourDataForContext(MeasurementSchedule schedule,
-        long beginTime, long endTime) {
+    private List<MeasurementDataNumericHighLowComposite> findAggregateDataForContext(MeasurementSchedule schedule,
+        long beginTime, long endTime, String columnFamily) {
         SliceQuery<Integer, Composite, Double> dataQuery = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
             CompositeSerializer.get(), DoubleSerializer.get());
         dataQuery.setColumnFamily(oneHourMetricsDataCF);

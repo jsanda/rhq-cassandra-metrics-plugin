@@ -41,4 +41,8 @@ public class DateTimeService {
     public boolean isIn1HourDataRange(DateTime dateTime) {
         return dateTimeComparator.compare(now().minusDays(14), dateTime) < 0;
     }
+
+    public boolean isIn6HourDataRnage(DateTime dateTime) {
+        return dateTimeComparator.compare(now().minusDays(31), dateTime) < 0;
+    }
 }
