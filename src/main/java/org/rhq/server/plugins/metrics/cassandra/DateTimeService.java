@@ -45,4 +45,8 @@ public class DateTimeService {
     public boolean isIn6HourDataRnage(DateTime dateTime) {
         return dateTimeComparator.compare(now().minusDays(31), dateTime) < 0;
     }
+
+    public boolean isIn24HourDataRnage(DateTime dateTime) {
+        return dateTimeComparator.compare(now().minusDays(365), dateTime) < 0;
+    }
 }

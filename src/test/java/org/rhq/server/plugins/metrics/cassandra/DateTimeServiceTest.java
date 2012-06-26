@@ -58,4 +58,18 @@ public class DateTimeServiceTest {
             "32 days ago should not be in 6 hour data range.");
     }
 
+    @Test
+    public void timestampBefore365DaysShouldBeIn24HourDataRange() {
+        assertTrue(dateTimeService.isIn24HourDataRnage(now().minusDays(31)),
+            "31 days ago should be in 24 hour data range.");
+        assertTrue(dateTimeService.isIn24HourDataRnage(now().minusDays(364)),
+            "364 days ago should be in 24 hour data range.");
+    }
+
+    @Test
+    public void timestampAfter365DaysShouldNotBeIn24HourDataRange() {
+        assertFalse(dateTimeService.isIn24HourDataRnage(now().minusDays(365)),
+            "365 days ago should not be in 24 hour data range.");
+    }
+
 }
