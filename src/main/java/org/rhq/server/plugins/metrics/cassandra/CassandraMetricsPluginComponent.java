@@ -1,5 +1,8 @@
 package org.rhq.server.plugins.metrics.cassandra;
 
+import static me.prettyprint.hector.api.beans.AbstractComposite.ComponentEquality.EQUAL;
+import static me.prettyprint.hector.api.beans.AbstractComposite.ComponentEquality.LESS_THAN_EQUAL;
+
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -38,6 +41,7 @@ import me.prettyprint.hector.api.Cluster;
 import me.prettyprint.hector.api.Keyspace;
 import me.prettyprint.hector.api.beans.Composite;
 import me.prettyprint.hector.api.beans.HColumn;
+import me.prettyprint.hector.api.ddl.ComparatorType;
 import me.prettyprint.hector.api.factory.HFactory;
 import me.prettyprint.hector.api.mutation.MutationResult;
 import me.prettyprint.hector.api.mutation.Mutator;
@@ -47,6 +51,8 @@ import me.prettyprint.hector.api.query.SliceQuery;
  * @author John Sanda
  */
 public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet, ServerPluginComponent {
+
+    private static final int DEFAULT_PAGE_SIZE = 200;
 
     private Cluster cluster;
 
@@ -104,12 +110,26 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
     @Override
     public List<MeasurementDataNumericHighLowComposite> findDataForContext(Subject subject, EntityContext entityContext,
         MeasurementSchedule schedule, long beginTime, long endTime) {
+        DateTime begin = new DateTime(beginTime);
 
+        if (dateTimeService.isInRawDataRange(begin)) {
+            return findRawDataForContext(schedule, beginTime, endTime);
+        }
+
+        if (dateTimeService.isIn1HourDataRange(begin)) {
+            return find1HourDataForContext(schedule, beginTime, endTime);
+        }
+
+        return null;
+    }
+
+    private List<MeasurementDataNumericHighLowComposite> findRawDataForContext(MeasurementSchedule schedule,
+        long beginTime, long endTime) {
         SliceQuery<Integer, Long, Double> rawDataQuery = HFactory.createSliceQuery(keyspace,
             IntegerSerializer.get(), LongSerializer.get(), DoubleSerializer.get());
         rawDataQuery.setColumnFamily(rawMetricsDataCF);
         rawDataQuery.setKey(schedule.getId());
-        rawDataQuery.setRange(beginTime, endTime, false, 2);
+        rawDataQuery.setRange(beginTime, endTime, false, DEFAULT_PAGE_SIZE);
 
         ColumnSliceIterator<Integer, Long, Double> rawDataIterator =
             new ColumnSliceIterator<Integer, Long, Double>(rawDataQuery, beginTime, endTime, false);
@@ -127,7 +147,43 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
             data.add(new MeasurementDataNumericHighLowComposite(bucket.getStartTime(), bucket.getAvg(),
                 bucket.getMax(), bucket.getMin()));
         }
+        return data;
+    }
 
+    private List<MeasurementDataNumericHighLowComposite> find1HourDataForContext(MeasurementSchedule schedule,
+        long beginTime, long endTime) {
+        SliceQuery<Integer, Composite, Double> dataQuery = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
+            CompositeSerializer.get(), DoubleSerializer.get());
+        dataQuery.setColumnFamily(oneHourMetricsDataCF);
+        dataQuery.setKey(schedule.getId());
+
+        Composite begin = new Composite();
+        begin.addComponent(beginTime, LongSerializer.get(), ComparatorType.LONGTYPE.getTypeName(), EQUAL);
+
+        Composite end = new Composite();
+        end.addComponent(endTime, LongSerializer.get(), ComparatorType.LONGTYPE.getTypeName(), LESS_THAN_EQUAL);
+        dataQuery.setRange(begin, end, true, DEFAULT_PAGE_SIZE);
+
+        ColumnSliceIterator<Integer, Composite, Double> dataIterator =
+            new ColumnSliceIterator<Integer, Composite, Double>(dataQuery, begin, end, false);
+        Buckets buckets = new Buckets(beginTime, endTime);
+        HColumn<Composite, Double> column = null;
+
+        while (dataIterator.hasNext()) {
+            column = dataIterator.next();
+            Composite columnName = column.getName();
+            if (AggregateType.valueOf(columnName.get(1, IntegerSerializer.get())) != AggregateType.AVG) {
+                continue;
+            }
+            buckets.insert((Long) columnName.get(0, LongSerializer.get()), column.getValue());
+        }
+
+        List<MeasurementDataNumericHighLowComposite> data = new ArrayList<MeasurementDataNumericHighLowComposite>();
+        for (int i = 0; i < buckets.getNumDataPoints(); ++i) {
+            Buckets.Bucket bucket = buckets.get(i);
+            data.add(new MeasurementDataNumericHighLowComposite(bucket.getStartTime(), bucket.getAvg(),
+                bucket.getMax(), bucket.getMin()));
+        }
         return data;
     }
 

@@ -162,7 +162,86 @@ public class CassandraMetricsPluginComponentTest {
 
     @Test(enabled = ENABLED)
     public void find1HourDataComposites() {
+        DateTime beginTime = now().minusDays(11);
+        DateTime endTime = now();
 
+        Buckets buckets = new Buckets(beginTime, endTime);
+        DateTime bucket0Time = new DateTime(buckets.get(0).getStartTime());
+        DateTime bucket59Time = new DateTime(buckets.get(59).getStartTime());
+
+        String scheduleName = getClass().getName() + "_SCHEDULE";
+        MeasurementSchedule schedule = new MeasurementSchedule();
+        schedule.setId(123);
+        long interval = MINUTE * 10;
+        boolean enabled = true;
+        DataType dataType = DataType.MEASUREMENT;
+        MeasurementScheduleRequest request = new MeasurementScheduleRequest(schedule.getId(), scheduleName, interval,
+            enabled, dataType);
+
+        // insert one hour data to be aggregated
+        Mutator<Integer> oneHourMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket0Time, AggregateType.MAX, 3.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket0Time, AggregateType.AVG, 2.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket0Time, AggregateType.MIN, 1.0));
+
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket0Time.plusHours(1), AggregateType.MAX, 6.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket0Time.plusHours(1), AggregateType.AVG, 5.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket0Time.plusHours(1), AggregateType.MIN, 4.0));
+
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket0Time.plusHours(2), AggregateType.MAX, 3.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket0Time.plusHours(2), AggregateType.AVG, 3.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket0Time.plusHours(2), AggregateType.MIN, 3.0));
+
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket59Time, AggregateType.MAX, 9.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket59Time, AggregateType.AVG, 5.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket59Time, AggregateType.MIN, 2.0));
+
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket59Time.plusHours(1), AggregateType.MAX, 6.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket59Time.plusHours(1), AggregateType.AVG, 5.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket59Time.plusHours(1), AggregateType.MIN, 4.0));
+
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket59Time.plusHours(2), AggregateType.MAX, 3.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket59Time.plusHours(2), AggregateType.AVG, 3.0));
+        oneHourMutator.addInsertion(schedule.getId(), ONE_HOUR_METRIC_DATA_CF,
+            create1HourColumn(bucket59Time.plusHours(2), AggregateType.MIN, 3.0));
+
+        oneHourMutator.execute();
+
+        List<MeasurementDataNumericHighLowComposite> actualData = metricsServer.findDataForContext(null, null,
+            schedule, beginTime.getMillis(), endTime.getMillis());
+
+        assertEquals(actualData.size(), buckets.getNumDataPoints(), "Expected to get back 60 data points.");
+
+        MeasurementDataNumericHighLowComposite expectedBucket0Data = new MeasurementDataNumericHighLowComposite(
+            buckets.get(0).getStartTime(), (2.0 + 5.0 + 3.0) / 3, 5.0, 2.0);
+        MeasurementDataNumericHighLowComposite expectedBucket59Data = new MeasurementDataNumericHighLowComposite(
+            buckets.get(59).getStartTime(), (5.0 + 5.0 + 3.0) / 3, 5.0, 3.0);
+        MeasurementDataNumericHighLowComposite expectedBucket29Data = new MeasurementDataNumericHighLowComposite(
+            buckets.get(29).getStartTime(), Double.NaN, Double.NaN, Double.NaN);
+
+        assertPropertiesMatch("The data for bucket 0 does not match the expected values.", expectedBucket0Data,
+            actualData.get(0));
+        assertPropertiesMatch("The data for bucket 59 does not match the expected values.", expectedBucket59Data,
+            actualData.get(59));
+        assertPropertiesMatch("The data for bucket 29 does not match the expected values.", expectedBucket29Data,
+            actualData.get(29));
     }
 
     @Test(enabled = ENABLED)
@@ -823,6 +902,15 @@ public class CassandraMetricsPluginComponentTest {
 
     private HColumn<Composite, Double> create1HourColumn(DateTime dateTime, AggregateType type, double value) {
         return HFactory.createColumn(createAggregateKey(dateTime, type), value, TWO_WEEKS, CompositeSerializer.get(),
+            DoubleSerializer.get());
+    }
+
+    private HColumn<Composite, Double> create1HourColumn(AggregateType type, DateTime dateTime, double value) {
+        Composite composite = new Composite();
+        composite.addComponent(type.ordinal(), IntegerSerializer.get());
+        composite.addComponent(dateTime.getMillis(), LongSerializer.get());
+
+        return HFactory.createColumn(composite, value, TWO_WEEKS, CompositeSerializer.get(),
             DoubleSerializer.get());
     }
 
