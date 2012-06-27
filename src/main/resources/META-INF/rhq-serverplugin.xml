@@ -34,4 +34,6 @@
                        required="true" default="resource_traits"/>
   </serverplugin:plugin-configuration>
 
+  <plugin-test-delegate class="CassandraMetricsTestDelegate"/>
+
 </metrics-plugin>
