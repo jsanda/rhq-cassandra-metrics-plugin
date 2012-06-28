@@ -143,6 +143,36 @@
           </execution>
         </executions>
       </plugin>
+
+      <plugin>
+        <artifactId>maven-antrun-plugin</artifactId>
+        <executions>
+          <execution>
+            <id>create-bundle</id>
+            <phase>process-resources</phase>
+            <configuration>
+              <target>
+                <property name="bundle.basedir" 
+                          value="${basedir}/target/classes/org/rhq/server/plugins/metrics/cassandra"/>
+                <zip basedir="${bundle.basedir}/cassandra-1.1.0" 
+                     destfile="${bundle.basedir}/cassandra-1.1.0.zip"/>
+                <zip destfile="${bundle.basedir}/cassandra-bundle.zip">
+                  <fileset dir="${bundle.basedir}">
+                    <include name="deploy.xml"/>
+                    <include name="cassandra-1.1.0.zip"/>
+                  </fileset>
+                </zip>
+                <delete file="${bundle.basedir}/cassandra-1.1.0.zip"/>
+                <delete file="${bundle.basedir}/deploy.xml"/>
+                <delete dir="${bundle.basedir}/cassandra-1.1.0"/>
+              </target>
+            </configuration>
+            <goals>
+              <goal>run</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
     </plugins>
   </build>
 

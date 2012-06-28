@@ -1,0 +1,71 @@
+<project name="cassandra_dev_node_bundle"
+         default="main"
+         xmlns:rhq="antlib:org.rhq.bundle">
+  <rhq:bundle name="Cassandra Dev Node Bundle"
+              version="1.0"
+              description="A bundle for deploying Cassandra nodes for development">
+
+    <rhq:input-property name="cluster.name"
+                        description="The name of the cluster. This is used to prevent machines in one logical cluster from joining another"
+                        required="true"
+                        defaultValue="rhqdev"
+                        type="string"/>
+
+    <rhq:input-property name="auto.bootstrap"
+                        description="Set to true to make new (non-seed) node that automatically migrates the right data to itself. If no initial token is specified, the node will pick one such that it will get half the range of the most loaded node. If a node starts up without boostrapping, it will mark itself bootstrapped so that you cannot subsequently accidently boostrap a node with data on it."
+                        required="true"
+                        defaultValue="false"
+                        type="boolean"/>
+ 
+    <rhq:input-property name="data.dir"
+                        description="The directory where Cassnadra should store data files. This should be a path relative to the base deployment directory."
+                        required="true"
+                        defaultValue="data"
+                        type="string"/>
+  
+    <rhq:input-property name="commitlog.dir"
+                        description="The directory where Cassandra stores its commit logs. This should be a path relative to the base deployment directory."
+                        required="true"
+                        defaultValue="log"
+                        type="string"/>
+
+    <rhq:input-property name="saved.caches.dir"
+                        description="The directory where Cassandra stores saved caches. This should be a path relative to the base deployment directory."
+                        required="true"
+                        defaultValue="saved_caches"
+                        type="string"/>
+
+    <rhq:input-property name="seeds"
+                        description="A comma-delimited list of IP addresses/host names that are deemed contact points. Cassandra nodes use this list of hosts to find each other and learn the topology of the ring. If you are running a local development cluster, be sure to have aliases set up for localhost."
+                        required="false"
+                        defaultValue="127.0.0.1"
+                        type="string"/>
+
+    <rhq:input-property name="jmx.port"
+                        description="The port over which Cassandra listens for JMX connections. Each node should be assigned a unique port."
+                        required="false"
+                        defaultValue="7200"
+                        type="string"/>
+
+    <rhq:deployment-unit name="cassandra" postinstallTarget="post-install">
+      <rhq:archive name="cassandra-1.1.0.zip">
+        <rhq:replace>
+          <rhq:fileset dir="conf">
+            <include name="cassandra.yaml"/>
+          </rhq:fileset>
+          <rhq:fileset dir="conf">
+            <include name="cassandra-env.sh"/>
+          </rhq:fileset>
+        </rhq:replace>
+      </rhq:archive>
+    </rhq:deployment-unit>
+  </rhq:bundle>
+
+  <target name="main"/>
+
+  <target name="post-install">
+    <mkdir dir="${rhq.deploy.dir}/${data.dir}"/>
+    <mkdir dir="${rhq.deploy.dir}/${commitlog.dir}"/>
+    <mkdir dir="${rhq.deploy.dir}/${saved.caches.dir}"/>
+  </target>
+</project>
