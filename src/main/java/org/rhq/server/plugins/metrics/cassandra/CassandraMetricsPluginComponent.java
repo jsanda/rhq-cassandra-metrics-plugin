@@ -3,6 +3,8 @@ package org.rhq.server.plugins.metrics.cassandra;
 import static me.prettyprint.hector.api.beans.AbstractComposite.ComponentEquality.EQUAL;
 import static me.prettyprint.hector.api.beans.AbstractComposite.ComponentEquality.LESS_THAN_EQUAL;
 
+import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -15,8 +17,15 @@ import org.joda.time.Hours;
 import org.joda.time.Minutes;
 
 import org.rhq.core.domain.auth.Subject;
+import org.rhq.core.domain.bundle.Bundle;
+import org.rhq.core.domain.bundle.BundleDeployment;
+import org.rhq.core.domain.bundle.BundleDestination;
+import org.rhq.core.domain.bundle.BundleType;
+import org.rhq.core.domain.bundle.BundleVersion;
 import org.rhq.core.domain.common.EntityContext;
 import org.rhq.core.domain.configuration.Configuration;
+import org.rhq.core.domain.configuration.PropertySimple;
+import org.rhq.core.domain.criteria.ResourceGroupCriteria;
 import org.rhq.core.domain.criteria.TraitMeasurementCriteria;
 import org.rhq.core.domain.measurement.DisplayType;
 import org.rhq.core.domain.measurement.MeasurementDataNumeric;
@@ -26,10 +35,19 @@ import org.rhq.core.domain.measurement.MeasurementSchedule;
 import org.rhq.core.domain.measurement.TraitMeasurement;
 import org.rhq.core.domain.measurement.TraitMeasurementDTO;
 import org.rhq.core.domain.measurement.composite.MeasurementDataNumericHighLowComposite;
+import org.rhq.core.domain.resource.ResourceCategory;
+import org.rhq.core.domain.resource.group.ResourceGroup;
 import org.rhq.core.domain.util.PageList;
+import org.rhq.core.util.stream.StreamUtil;
+import org.rhq.enterprise.server.auth.SubjectManagerLocal;
+import org.rhq.enterprise.server.bundle.BundleManagerLocal;
+import org.rhq.enterprise.server.plugin.pc.ControlFacet;
+import org.rhq.enterprise.server.plugin.pc.ControlResults;
 import org.rhq.enterprise.server.plugin.pc.ServerPluginComponent;
 import org.rhq.enterprise.server.plugin.pc.ServerPluginContext;
 import org.rhq.enterprise.server.plugin.pc.metrics.MetricsServerPluginFacet;
+import org.rhq.enterprise.server.resource.group.ResourceGroupManagerLocal;
+import org.rhq.enterprise.server.util.LookupUtil;
 
 import me.prettyprint.cassandra.serializers.CompositeSerializer;
 import me.prettyprint.cassandra.serializers.DoubleSerializer;
@@ -50,7 +68,7 @@ import me.prettyprint.hector.api.query.SliceQuery;
 /**
  * @author John Sanda
  */
-public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet, ServerPluginComponent {
+public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet, ControlFacet, ServerPluginComponent {
 
     private static final int DEFAULT_PAGE_SIZE = 200;
 
@@ -472,23 +490,6 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         return mutator.execute();
     }
 
-//    private MutationResult updateMetricsQueue(String columnFamily,
-//        Map<Integer, DateTime> updatedSchedules) {
-//        Mutator<String> mutator = HFactory.createMutator(keyspace, StringSerializer.get());
-//
-//        for (Integer scheduleId : updatedSchedules.keySet()) {
-//            Composite composite = new Composite();
-//            DateTime timeSlice = getTimeSlice(columnFamily, updatedSchedules.get(scheduleId));
-//            composite.addComponent(timeSlice.getMillis(), LongSerializer.get());
-//            composite.addComponent(scheduleId, IntegerSerializer.get());
-//            HColumn<Composite, Integer> column = HFactory.createColumn(composite, 0, CompositeSerializer.get(),
-//                IntegerSerializer.get());
-//            mutator.addInsertion(columnFamily, metricsQueueCF, column);
-//        }
-//
-//        return mutator.execute();
-//    }
-
     private HColumn<Composite, Double> createAvgColumn(DateTime timestamp, double value, int ttl) {
         return createAggregateColumn(AggregateType.AVG, timestamp, value, ttl);
     }
@@ -514,4 +515,70 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         return now.hourOfDay().roundFloorCopy();
     }
 
+    @Override
+    public ControlResults invoke(String operation, Configuration params) {
+        try {
+            SubjectManagerLocal subjectManager = LookupUtil.getSubjectManager();
+            Subject overlord = subjectManager.getOverlord();
+
+            BundleManagerLocal bundleManager = LookupUtil.getBundleManager();
+
+            BundleType bundleType = bundleManager.getBundleType(overlord, "Ant Bundle");
+            Bundle bundle = bundleManager.createBundle(overlord, "Cassandra Dev Node Bundle",
+                "Cassandra Dev Node Bundle", bundleType.getId());
+
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            StreamUtil.copy(getClass().getResourceAsStream("cassandra-bundle.zip"), outputStream);
+
+            BundleVersion bundleVersion = bundleManager.createBundleVersionViaByteArray(overlord,
+                outputStream.toByteArray());
+
+            Configuration bundleConfig = new Configuration();
+            File clusterDir = new File(params.getSimpleValue("clusterDirectory"));
+
+            ResourceGroup group = findPlatformGroup("Cassandra Hosts");
+
+            Configuration deploymentConfig = new Configuration();
+            deploymentConfig.put(new PropertySimple("cluster.name", "rhqdev"));
+            deploymentConfig.put(new PropertySimple("cluster.dir", clusterDir.getAbsolutePath()));
+            deploymentConfig.put(new PropertySimple("auto.bootstrap", "false"));
+            deploymentConfig.put(new PropertySimple("data.dir", "data"));
+            deploymentConfig.put(new PropertySimple("commitlog.dir", "log"));
+            deploymentConfig.put(new PropertySimple("saved.caches.dir", "saved_caches"));
+            deploymentConfig.put(new PropertySimple("seeds", ""));
+            deploymentConfig.put(new PropertySimple("jmx.port", "7200"));
+
+            BundleDestination bundleDestination = bundleManager.createBundleDestination(overlord, bundle.getId(),
+                "cassandra-deployment", "cassandra-deployment", "Root File System",
+                new File(clusterDir, "node0").getAbsolutePath(), group.getId());
+
+            BundleDeployment bundleDeployment = bundleManager.createBundleDeployment(overlord, bundleVersion.getId(),
+                bundleDestination.getId(), "cassandra-deployment", deploymentConfig);
+
+            bundleManager.scheduleBundleDeployment(overlord, bundleDeployment.getId(), false);
+
+            return new ControlResults();
+
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    private ResourceGroup findPlatformGroup(String groupName) {
+        SubjectManagerLocal subjectManager = LookupUtil.getSubjectManager();
+        Subject overlord = subjectManager.getOverlord();
+
+        ResourceGroupCriteria criteria = new ResourceGroupCriteria();
+        criteria.addFilterExplicitResourceCategory(ResourceCategory.PLATFORM);
+        criteria.addFilterName(groupName);
+
+        ResourceGroupManagerLocal groupManager = LookupUtil.getResourceGroupManager();
+        PageList<ResourceGroup> groups = groupManager.findResourceGroupsByCriteria(overlord, criteria);
+
+        if (groups.isEmpty()) {
+            throw new IllegalArgumentException("No platform group with name <" + groupName + "> found.");
+        }
+
+        return groups.get(0);
+    }
 }

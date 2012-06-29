@@ -11,6 +11,11 @@
                         defaultValue="rhqdev"
                         type="string"/>
 
+    <rhq:input-property name="cluster.dir"
+                        description="The directory in which Cassandra nodes will be installed"
+                        required="true"
+                        type="string"/>
+
     <rhq:input-property name="auto.bootstrap"
                         description="Set to true to make new (non-seed) node that automatically migrates the right data to itself. If no initial token is specified, the node will pick one such that it will get half the range of the most loaded node. If a node starts up without boostrapping, it will mark itself bootstrapped so that you cannot subsequently accidently boostrap a node with data on it."
                         required="true"
@@ -47,7 +52,7 @@
                         defaultValue="7200"
                         type="string"/>
 
-    <rhq:deployment-unit name="cassandra" postinstallTarget="post-install">
+    <rhq:deployment-unit name="cassandra" preinstallTarget="pre-install" postinstallTarget="post-install">
       <rhq:archive name="cassandra-1.1.0.zip">
         <rhq:replace>
           <rhq:fileset dir="conf">
@@ -62,6 +67,10 @@
   </rhq:bundle>
 
   <target name="main"/>
+
+  <target name="pre-install">
+    <mkdir dir="${cluster.dir}"/>
+  </target>
 
   <target name="post-install">
     <mkdir dir="${rhq.deploy.dir}/${data.dir}"/>
