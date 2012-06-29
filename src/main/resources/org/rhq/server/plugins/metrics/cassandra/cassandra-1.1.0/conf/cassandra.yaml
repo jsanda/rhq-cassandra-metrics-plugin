@@ -19,7 +19,7 @@ cluster_name: @@cluster.name@@
 # the heaviest-loaded existing node.  If there is no load information
 # available, such as is the case with a new cluster, it will pick
 # a random token, which will lead to hot spots.
-initial_token:
+initial_token: @@initial.token@@
 
 # Set to true to make new (non-seed) node that automatically migrates
 # the right data to itself. If no initial token is specified, the node

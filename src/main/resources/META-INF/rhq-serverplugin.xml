@@ -16,14 +16,14 @@
     <serverplugin:control name="createDevCluster" description="">
       <serverplugin:parameters>
         <c:simple-property name="host"
-                           required="false"
+                           required="true"
                            description="The host name or IP address to provision with Cassandra nodes."
                            default="127.0.0.1"/>
         <c:simple-property name="clusterDirectory"
                            required="true"
                            description="The directory in which Cassandra nodes will be installed."/>
         <c:simple-property name="numberOfNodes"
-                           required="false"
+                           required="true"
                            description="The number of Cassandra nodes to install"
                            default="1"/>
       </serverplugin:parameters>
