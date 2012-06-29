@@ -82,5 +82,9 @@
     <mkdir dir="${rhq.deploy.dir}/${data.dir}"/>
     <mkdir dir="${rhq.deploy.dir}/${commitlog.dir}"/>
     <mkdir dir="${rhq.deploy.dir}/${saved.caches.dir}"/>
+
+    <property name="bin.dir" value="${rhq.deploy.dir}/bin"/>
+    <chmod file="${bin.dir}/cassandra" perm="+x"/>
+    <exec dir="${bin.dir}" executable="cassandra" spawn="true" resolveexecutable="true"/>
   </target>
 </project>

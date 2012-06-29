@@ -1,8 +1,12 @@
 package org.rhq.server.plugins.metrics.cassandra;
 
+import static org.rhq.core.util.StringUtil.collectionToString;
+
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.math.BigInteger;
+import java.util.HashSet;
+import java.util.Set;
 
 import org.rhq.core.domain.auth.Subject;
 import org.rhq.core.domain.bundle.Bundle;
@@ -51,7 +55,12 @@ public class OperationsDelegate {
 
             ResourceGroup group = findPlatformGroup("Cassandra Hosts");
 
+            Set<String> ipAddresses = calculateLocalIPAddresses(numNodes);
+
             for (int i = 0; i < numNodes; ++i) {
+                Set<String> seeds = getSeeds(ipAddresses, i + 1);
+                int jmxPort = 7200 + i;
+
                 Configuration deploymentConfig = new Configuration();
                 deploymentConfig.put(new PropertySimple("cluster.name", "rhqdev"));
                 deploymentConfig.put(new PropertySimple("cluster.dir", clusterDir.getAbsolutePath()));
@@ -59,8 +68,8 @@ public class OperationsDelegate {
                 deploymentConfig.put(new PropertySimple("data.dir", "data"));
                 deploymentConfig.put(new PropertySimple("commitlog.dir", "log"));
                 deploymentConfig.put(new PropertySimple("saved.caches.dir", "saved_caches"));
-                deploymentConfig.put(new PropertySimple("seeds", ""));
-                deploymentConfig.put(new PropertySimple("jmx.port", "7200"));
+                deploymentConfig.put(new PropertySimple("seeds", collectionToString(seeds)));
+                deploymentConfig.put(new PropertySimple("jmx.port", Integer.toString(jmxPort)));
                 deploymentConfig.put(new PropertySimple("initial.token", generateToken(i, numNodes)));
 
                 String destinationName = "cassandra-node[" + i + "]-deployment";
@@ -76,10 +85,36 @@ public class OperationsDelegate {
             }
 
             return new ControlResults();
-
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
+    }
+
+    private Set<String> calculateLocalIPAddresses(int numNodes) {
+        Set<String> addresses = new HashSet<String>();
+        for (int i = 1; i <= numNodes; ++i) {
+            addresses.add(getLocalIPAddress(i));
+        }
+        return addresses;
+    }
+
+    private Set<String> getSeeds(Set<String> addresses, int i) {
+        Set<String> seeds = new HashSet<String>();
+        String address = getLocalIPAddress(i);
+
+        for (String nodeAddress : addresses) {
+            if (nodeAddress.equals(address)) {
+                continue;
+            } else {
+                seeds.add(nodeAddress);
+            }
+        }
+
+        return seeds;
+    }
+
+    private String getLocalIPAddress(int i) {
+        return "127.0.0." + i;
     }
 
     private String generateToken(int i, int numNodes) {
