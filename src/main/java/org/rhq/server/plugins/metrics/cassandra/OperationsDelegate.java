@@ -68,9 +68,11 @@ public class OperationsDelegate {
                 deploymentConfig.put(new PropertySimple("data.dir", "data"));
                 deploymentConfig.put(new PropertySimple("commitlog.dir", "log"));
                 deploymentConfig.put(new PropertySimple("saved.caches.dir", "saved_caches"));
+                deploymentConfig.put(new PropertySimple("hostname", getLocalIPAddress(i + 1)));
                 deploymentConfig.put(new PropertySimple("seeds", collectionToString(seeds)));
                 deploymentConfig.put(new PropertySimple("jmx.port", Integer.toString(jmxPort)));
                 deploymentConfig.put(new PropertySimple("initial.token", generateToken(i, numNodes)));
+                deploymentConfig.put(new PropertySimple("install.schema", i == 0));
 
                 String destinationName = "cassandra-node[" + i + "]-deployment";
 

@@ -84,6 +84,15 @@
   </dependencies>
 
   <build>
+    <resources>
+      <resource>
+        <directory>src/main/resources</directory>
+      </resource>
+      <resource>
+        <directory>src/cassandra/cli</directory>
+      </resource>
+    </resources>
+
     <plugins>
       <plugin>
         <artifactId>maven-dependency-plugin</artifactId>
@@ -154,17 +163,20 @@
               <target>
                 <property name="bundle.basedir" 
                           value="${basedir}/target/classes/org/rhq/server/plugins/metrics/cassandra"/>
+                <copy file="${project.build.outputDirectory}/dbsetup.script" todir="${bundle.basedir}"/>
                 <zip basedir="${bundle.basedir}/cassandra-1.1.0" 
                      destfile="${bundle.basedir}/cassandra-1.1.0.zip"/>
                 <zip destfile="${bundle.basedir}/cassandra-bundle.zip">
                   <fileset dir="${bundle.basedir}">
                     <include name="deploy.xml"/>
+                    <include name="dbsetup.script"/>
                     <include name="cassandra-1.1.0.zip"/>
                   </fileset>
                 </zip>
                 <delete file="${bundle.basedir}/cassandra-1.1.0.zip"/>
                 <delete file="${bundle.basedir}/deploy.xml"/>
                 <delete dir="${bundle.basedir}/cassandra-1.1.0"/>
+                <delete file="${bundle.basedir}/dbsetup.script"/>
               </target>
             </configuration>
             <goals>
