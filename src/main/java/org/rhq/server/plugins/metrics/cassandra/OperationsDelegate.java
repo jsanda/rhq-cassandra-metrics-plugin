@@ -66,7 +66,8 @@ public class OperationsDelegate {
                 deploymentConfig.put(new PropertySimple("cluster.dir", clusterDir.getAbsolutePath()));
                 deploymentConfig.put(new PropertySimple("auto.bootstrap", "false"));
                 deploymentConfig.put(new PropertySimple("data.dir", "data"));
-                deploymentConfig.put(new PropertySimple("commitlog.dir", "log"));
+                deploymentConfig.put(new PropertySimple("commitlog.dir", "commit_log"));
+                deploymentConfig.put(new PropertySimple("log.dir", "logs"));
                 deploymentConfig.put(new PropertySimple("saved.caches.dir", "saved_caches"));
                 deploymentConfig.put(new PropertySimple("hostname", getLocalIPAddress(i + 1)));
                 deploymentConfig.put(new PropertySimple("seeds", collectionToString(seeds)));

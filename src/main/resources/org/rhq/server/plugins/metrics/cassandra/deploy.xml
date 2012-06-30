@@ -31,13 +31,19 @@
     <rhq:input-property name="commitlog.dir"
                         description="The directory where Cassandra stores its commit logs. This should be a path relative to the base deployment directory."
                         required="true"
-                        defaultValue="log"
+                        defaultValue="commit_log"
                         type="string"/>
 
     <rhq:input-property name="saved.caches.dir"
                         description="The directory where Cassandra stores saved caches. This should be a path relative to the base deployment directory."
                         required="true"
                         defaultValue="saved_caches"
+                        type="string"/>
+
+    <rhq:input-property name="log.dir"
+                        description="The directory where Cassandra stores log files. This should be a path relative to the base deployment directory."
+                        required="false"
+                        defaultValue="logs"
                         type="string"/>
 
     <rhq:input-property name="hostname"
@@ -80,6 +86,9 @@
           <rhq:fileset dir="conf">
             <include name="cassandra-env.sh"/>
           </rhq:fileset>
+          <rhq:fileset dir="conf">
+            <include name="log4j-server.properties"/>
+          </rhq:fileset>
         </rhq:replace>
       </rhq:archive>
     </rhq:deployment-unit>
@@ -97,6 +106,7 @@
     <mkdir dir="${rhq.deploy.dir}/${data.dir}"/>
     <mkdir dir="${rhq.deploy.dir}/${commitlog.dir}"/>
     <mkdir dir="${rhq.deploy.dir}/${saved.caches.dir}"/>
+    <mkdir dir="${rhq.deploy.dir}/${log.dir}"/>
 
     <chmod file="${bin.dir}/cassandra" perm="+x"/>
     <chmod file="${bin.dir}/cqlsh" perm="+x"/>
@@ -114,7 +124,6 @@
         args.setLine("-f ../scripts/dbsetup.script");
         exec.setDir(java.io.File(project.getProperty("bin.dir")));
         exec.setExecutable("cassandra-cli");
-        //exec.setSpawn(true);
         exec.setResolveExecutable(true);
         exec.setError(java.io.File("/home/jsanda/cassandra.log"));
         exec.setOutput(java.io.File("/home/jsanda/cassandra.log"));
