@@ -13,18 +13,27 @@
     xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
 
   <serverplugin:plugin-component class="CassandraMetricsPluginComponent">
-    <serverplugin:control name="createDevCluster" description="">
+    <serverplugin:control name="createLocalCluster"
+                          description="This operation installs, configures, and starts Cassandra nodes on a single
+                          machine. Additionally, the RHQ schema is installed on the cluster. The first node is
+                          assigned the localhost address 127.0.0.1. Additional nodes are assigned aliases for localhost,
+                          e.g., 127.0.0.2, 127.0.0.3, etc. The operation assumes that the necessary aliases already
+                          exist.">
       <serverplugin:parameters>
         <c:simple-property name="host"
                            required="true"
-                           description="The host name or IP address to provision with Cassandra nodes."
+                           description="The host name or IP address to provision with Cassandra nodes. All nodes are
+                           installed on this machine. The first node will be assigned to 127.0.0.1 and subsequent nodes
+                           will be assigned to localhost aliases of the form 127.0.0.2, 127.0.0.3, etc. Note that the
+                           operation assumes that all necessary aliases already exist."
                            default="127.0.0.1"/>
         <c:simple-property name="clusterDirectory"
                            required="true"
                            description="The directory in which Cassandra nodes will be installed."/>
         <c:simple-property name="numberOfNodes"
                            required="true"
-                           description="The number of Cassandra nodes to install"
+                           description="The number of Cassandra nodes to install. Note that a localhost alias needs to
+                           be configured for each node beyond the first one."
                            default="1"/>
       </serverplugin:parameters>
     </serverplugin:control>
