@@ -44,7 +44,7 @@ public class OperationsDelegate {
                 "Cassandra Dev Node Bundle", bundleType.getId());
 
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            StreamUtil.copy(getClass().getResourceAsStream("cassandra-bundle.zip"), outputStream);
+            StreamUtil.copy(getClass().getResourceAsStream("cassandra-bundle.jar"), outputStream);
 
             BundleVersion bundleVersion = bundleManager.createBundleVersionViaByteArray(overlord,
                 outputStream.toByteArray());
