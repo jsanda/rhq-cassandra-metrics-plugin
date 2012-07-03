@@ -16,6 +16,9 @@ import org.rhq.core.domain.bundle.BundleType;
 import org.rhq.core.domain.bundle.BundleVersion;
 import org.rhq.core.domain.configuration.Configuration;
 import org.rhq.core.domain.configuration.PropertySimple;
+import org.rhq.core.domain.criteria.BundleCriteria;
+import org.rhq.core.domain.criteria.BundleDestinationCriteria;
+import org.rhq.core.domain.criteria.BundleVersionCriteria;
 import org.rhq.core.domain.criteria.ResourceCriteria;
 import org.rhq.core.domain.criteria.ResourceGroupCriteria;
 import org.rhq.core.domain.resource.Resource;
@@ -42,26 +45,26 @@ public class OperationsDelegate {
 
     private Subject overlord;
 
+    // Note that this needs to match the value in deploy.xml
+    private String bundleName = "Cassandra Dev Node Bundle";
+
+    // Note that this needs to match the value in deploy.xml
+    private String bundleVersion = "1.0";
+
     public OperationsDelegate() {
         SubjectManagerLocal subjectManager = LookupUtil.getSubjectManager();
         overlord = subjectManager.getOverlord();
+
+        resourceGroupManager = LookupUtil.getResourceGroupManager();
+        bundleManager = LookupUtil.getBundleManager();
     }
 
     public ControlResults invoke(String operation, Configuration params) {
         ControlResults results = new ControlResults();
 
         try {
-            BundleManagerLocal bundleManager = LookupUtil.getBundleManager();
-
-            BundleType bundleType = bundleManager.getBundleType(overlord, "Ant Bundle");
-            Bundle bundle = bundleManager.createBundle(overlord, "Cassandra Dev Node Bundle",
-                "Cassandra Dev Node Bundle", bundleType.getId());
-
-            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
-            StreamUtil.copy(getClass().getResourceAsStream("cassandra-bundle.jar"), outputStream);
-
-            BundleVersion bundleVersion = bundleManager.createBundleVersionViaByteArray(overlord,
-                outputStream.toByteArray());
+            Bundle bundle = getBundle();
+            BundleVersion bundleVersion = getBundleVersion(bundle);
 
             Configuration bundleConfig = new Configuration();
             File clusterDir = new File(params.getSimpleValue("clusterDirectory"));
@@ -94,15 +97,15 @@ public class OperationsDelegate {
                 deploymentConfig.put(new PropertySimple("replication.factor", replicationFactor));
 
                 String destinationName = "cassandra-node[" + i + "]-deployment";
+                String deployDir = new File(clusterDir, "node" + i).getAbsolutePath();
 
-                BundleDestination bundleDestination = bundleManager.createBundleDestination(overlord, bundle.getId(),
-                    destinationName, destinationName, "Root File System",
-                    new File(clusterDir, "node" + i).getAbsolutePath(), group.getId());
+                BundleDestination bundleDestination = getBundleDestination(bundleVersion, destinationName, group,
+                    deployDir);
 
                 BundleDeployment bundleDeployment = bundleManager.createBundleDeployment(overlord, bundleVersion.getId(),
                     bundleDestination.getId(), destinationName, deploymentConfig);
 
-                bundleManager.scheduleBundleDeployment(overlord, bundleDeployment.getId(), false);
+                bundleManager.scheduleBundleDeployment(overlord, bundleDeployment.getId(), true);
             }
 
             return new ControlResults();
@@ -111,7 +114,8 @@ public class OperationsDelegate {
             return results;
 
         } catch (Exception e) {
-            throw new RuntimeException(e);
+            results.setError(e);
+            return results;
         }
     }
 
@@ -147,6 +151,66 @@ public class OperationsDelegate {
         return num.multiply(new BigInteger(Integer.toString(i))).toString();
     }
 
+    private Bundle getBundle() throws Exception {
+        BundleType bundleType = bundleManager.getBundleType(overlord, "Ant Bundle");
+
+        BundleCriteria criteria = new BundleCriteria();
+        criteria.addFilterBundleTypeName(bundleType.getName());
+        criteria.addFilterName(bundleName);
+
+        PageList<Bundle> bundles = bundleManager.findBundlesByCriteria(overlord, criteria);
+
+        if (bundles.isEmpty()) {
+            return bundleManager.createBundle(overlord, bundleName, bundleName, bundleType.getId());
+        }
+
+        return bundles.get(0);
+    }
+
+    private BundleVersion getBundleVersion(Bundle bundle) throws Exception {
+        BundleVersionCriteria criteria = new BundleVersionCriteria();
+        criteria.addFilterBundleId(bundle.getId());
+        criteria.addFilterVersion(bundleVersion);
+        criteria.fetchBundle(true);
+        criteria.fetchBundleDeployments(true);
+
+        PageList<BundleVersion> bundleVersions = bundleManager.findBundleVersionsByCriteria(overlord, criteria);
+
+        if (bundleVersions.isEmpty()) {
+            ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
+            StreamUtil.copy(getClass().getResourceAsStream("cassandra-bundle.jar"), outputStream);
+            return bundleManager.createBundleVersionViaByteArray(overlord, outputStream.toByteArray());
+        }
+
+        return bundleVersions.get(0);
+    }
+
+    private BundleDestination getBundleDestination(BundleVersion bundleVersion, String destinationName,
+        ResourceGroup group, String deployDir) throws Exception {
+        BundleDestinationCriteria criteria = new BundleDestinationCriteria();
+        criteria.addFilterBundleId(bundleVersion.getBundle().getId());
+        //criteria.addFilterBundleVersionId(bundleVersion.getId());
+        criteria.addFilterGroupId(group.getId());
+
+        PageList<BundleDestination> bundleDestinations = bundleManager.findBundleDestinationsByCriteria(overlord,
+            criteria);
+
+        if (bundleDestinations.isEmpty()) {
+            return bundleManager.createBundleDestination(overlord, bundleVersion.getBundle().getId(),
+                destinationName, destinationName, "Root File System", deployDir, group.getId());
+        }
+
+        for (BundleDestination destination : bundleDestinations) {
+            if (destination.getDeployDir().equals(deployDir)) {
+                return destination;
+            }
+        }
+
+        throw new RuntimeException("Unable to get bundle destination for [bundleId: " +
+            bundleVersion.getBundle().getId() + ", bunldleVersionId: " + bundleVersion.getId() + ", destination: " +
+            destinationName + ", deployDir: " + deployDir + "]");
+    }
+
     private Resource getPlatform(String hostname) {
         ResourceCriteria criteria = new ResourceCriteria();
         criteria.setFiltersOptional(true);
@@ -175,7 +239,7 @@ public class OperationsDelegate {
         criteria.addFilterExplicitResourceCategory(ResourceCategory.PLATFORM);
         criteria.addFilterName(groupName);
 
-        PageList<ResourceGroup> groups = getResourceGroupManager().findResourceGroupsByCriteria(overlord, criteria);
+        PageList<ResourceGroup> groups = resourceGroupManager.findResourceGroupsByCriteria(overlord, criteria);
 
         if (groups.isEmpty()) {
             return createPlatformGroup(groupName, platform);
@@ -188,18 +252,8 @@ public class OperationsDelegate {
         ResourceGroup group = new ResourceGroup(groupName, resource.getResourceType());
         group.addExplicitResource(resource);
 
-        return getResourceGroupManager().createResourceGroup(overlord, group);
+        return resourceGroupManager.createResourceGroup(overlord, group);
     }
 
-//    private BundleManagerLocal getBundleManager() {
-//
-//    }
-
-    private ResourceGroupManagerLocal getResourceGroupManager() {
-        if (resourceGroupManager == null) {
-            resourceGroupManager = LookupUtil.getResourceGroupManager();
-        }
-        return resourceGroupManager;
-    }
 }
 
