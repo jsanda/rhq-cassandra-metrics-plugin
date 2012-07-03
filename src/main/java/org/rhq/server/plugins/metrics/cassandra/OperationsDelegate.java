@@ -16,7 +16,9 @@ import org.rhq.core.domain.bundle.BundleType;
 import org.rhq.core.domain.bundle.BundleVersion;
 import org.rhq.core.domain.configuration.Configuration;
 import org.rhq.core.domain.configuration.PropertySimple;
+import org.rhq.core.domain.criteria.ResourceCriteria;
 import org.rhq.core.domain.criteria.ResourceGroupCriteria;
+import org.rhq.core.domain.resource.Resource;
 import org.rhq.core.domain.resource.ResourceCategory;
 import org.rhq.core.domain.resource.group.ResourceGroup;
 import org.rhq.core.domain.util.PageList;
@@ -24,6 +26,8 @@ import org.rhq.core.util.stream.StreamUtil;
 import org.rhq.enterprise.server.auth.SubjectManagerLocal;
 import org.rhq.enterprise.server.bundle.BundleManagerLocal;
 import org.rhq.enterprise.server.plugin.pc.ControlResults;
+import org.rhq.enterprise.server.resource.ResourceManagerLocal;
+import org.rhq.enterprise.server.resource.ResourceNotFoundException;
 import org.rhq.enterprise.server.resource.group.ResourceGroupManagerLocal;
 import org.rhq.enterprise.server.util.LookupUtil;
 
@@ -32,11 +36,21 @@ import org.rhq.enterprise.server.util.LookupUtil;
  */
 public class OperationsDelegate {
 
-    public ControlResults invoke(String operation, Configuration params) {
-        try {
-            SubjectManagerLocal subjectManager = LookupUtil.getSubjectManager();
-            Subject overlord = subjectManager.getOverlord();
+    private ResourceGroupManagerLocal resourceGroupManager;
 
+    private BundleManagerLocal bundleManager;
+
+    private Subject overlord;
+
+    public OperationsDelegate() {
+        SubjectManagerLocal subjectManager = LookupUtil.getSubjectManager();
+        overlord = subjectManager.getOverlord();
+    }
+
+    public ControlResults invoke(String operation, Configuration params) {
+        ControlResults results = new ControlResults();
+
+        try {
             BundleManagerLocal bundleManager = LookupUtil.getBundleManager();
 
             BundleType bundleType = bundleManager.getBundleType(overlord, "Ant Bundle");
@@ -53,8 +67,10 @@ public class OperationsDelegate {
             File clusterDir = new File(params.getSimpleValue("clusterDirectory"));
             int numNodes = Integer.parseInt(params.getSimpleValue("numberOfNodes"));
             int replicationFactor = Integer.parseInt(params.getSimpleValue("replicationFactor", "1"));
+            String hostname = params.getSimpleValue("host");
 
-            ResourceGroup group = findPlatformGroup("Cassandra Hosts");
+            Resource platform = getPlatform(hostname);
+            ResourceGroup group = getPlatformGroup(platform, hostname);
 
             Set<String> ipAddresses = calculateLocalIPAddresses(numNodes);
 
@@ -90,6 +106,10 @@ public class OperationsDelegate {
             }
 
             return new ControlResults();
+        } catch (ResourceNotFoundException e) {
+            results.setError(e.getMessage());
+            return results;
+
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -127,22 +147,59 @@ public class OperationsDelegate {
         return num.multiply(new BigInteger(Integer.toString(i))).toString();
     }
 
-    private ResourceGroup findPlatformGroup(String groupName) {
-        SubjectManagerLocal subjectManager = LookupUtil.getSubjectManager();
-        Subject overlord = subjectManager.getOverlord();
+    private Resource getPlatform(String hostname) {
+        ResourceCriteria criteria = new ResourceCriteria();
+        criteria.setFiltersOptional(true);
+        criteria.addFilterResourceKey(hostname);
+        criteria.addFilterName(hostname);
+        criteria.addFilterResourceCategories(ResourceCategory.PLATFORM);
+        criteria.fetchResourceType(true);
+        criteria.fetchExplicitGroups(true);
+
+        ResourceManagerLocal resourceManager = LookupUtil.getResourceManager();
+        PageList<Resource> resources = resourceManager.findResourcesByCriteria(overlord, criteria);
+
+        if (resources.isEmpty()) {
+            String msg = "Could not find platform with hostname " + hostname + ". The value that you specify for the " +
+                "host argument should match either a platform's resource name and/or its resource key.";
+            throw new ResourceNotFoundException(msg);
+        }
+
+        return resources.get(0);
+    }
+
+    private ResourceGroup getPlatformGroup(Resource platform, String hostname) {
+        String groupName = hostname + " [Local Cassandra Cluster]";
 
         ResourceGroupCriteria criteria = new ResourceGroupCriteria();
         criteria.addFilterExplicitResourceCategory(ResourceCategory.PLATFORM);
         criteria.addFilterName(groupName);
 
-        ResourceGroupManagerLocal groupManager = LookupUtil.getResourceGroupManager();
-        PageList<ResourceGroup> groups = groupManager.findResourceGroupsByCriteria(overlord, criteria);
+        PageList<ResourceGroup> groups = getResourceGroupManager().findResourceGroupsByCriteria(overlord, criteria);
 
         if (groups.isEmpty()) {
-            throw new IllegalArgumentException("No platform group with name <" + groupName + "> found.");
+            return createPlatformGroup(groupName, platform);
         }
 
         return groups.get(0);
+    }
+
+    private ResourceGroup createPlatformGroup(String groupName, Resource resource) {
+        ResourceGroup group = new ResourceGroup(groupName, resource.getResourceType());
+        group.addExplicitResource(resource);
+
+        return getResourceGroupManager().createResourceGroup(overlord, group);
+    }
+
+//    private BundleManagerLocal getBundleManager() {
+//
+//    }
+
+    private ResourceGroupManagerLocal getResourceGroupManager() {
+        if (resourceGroupManager == null) {
+            resourceGroupManager = LookupUtil.getResourceGroupManager();
+        }
+        return resourceGroupManager;
     }
 }
 
