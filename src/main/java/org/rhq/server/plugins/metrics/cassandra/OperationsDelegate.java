@@ -52,6 +52,7 @@ public class OperationsDelegate {
             Configuration bundleConfig = new Configuration();
             File clusterDir = new File(params.getSimpleValue("clusterDirectory"));
             int numNodes = Integer.parseInt(params.getSimpleValue("numberOfNodes"));
+            int replicationFactor = Integer.parseInt(params.getSimpleValue("replicationFactor", "1"));
 
             ResourceGroup group = findPlatformGroup("Cassandra Hosts");
 
@@ -74,6 +75,7 @@ public class OperationsDelegate {
                 deploymentConfig.put(new PropertySimple("jmx.port", Integer.toString(jmxPort)));
                 deploymentConfig.put(new PropertySimple("initial.token", generateToken(i, numNodes)));
                 deploymentConfig.put(new PropertySimple("install.schema", i == 0));
+                deploymentConfig.put(new PropertySimple("replication.factor", replicationFactor));
 
                 String destinationName = "cassandra-node[" + i + "]-deployment";
 

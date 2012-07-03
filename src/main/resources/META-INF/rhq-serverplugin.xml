@@ -35,6 +35,12 @@
                            description="The number of Cassandra nodes to install. Note that a localhost alias needs to
                            be configured for each node beyond the first one."
                            default="1"/>
+        <c:simple-property name="replicationFactor"
+                           required="false"
+                           default="1"
+                           description="This sets the replication_factor setting in the RHQ keyspace definition. The
+                           replication factor indicates the total number of replicas; so, a replication factor of 2
+                           means that there will a total of two copies of data."/>
       </serverplugin:parameters>
     </serverplugin:control>
   </serverplugin:plugin-component>
