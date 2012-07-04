@@ -1,6 +1,6 @@
 create keyspace rhq
     with placement_strategy = 'org.apache.cassandra.locator.SimpleStrategy' and
-    strategy_options = {replication_factor:${replication.factor}};
+    strategy_options = {replication_factor:@@replication.factor@@};
 
 use rhq;
 

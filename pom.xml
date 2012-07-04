@@ -17,6 +17,8 @@
 
   <properties>
     <rhq.version>4.5.0-SNAPSHOT</rhq.version>
+    <replication.factor>1</replication.factor>
+    <cluster.mode>single</cluster.mode>
   </properties>
 
   <dependencies>
@@ -90,6 +92,7 @@
       </resource>
       <resource>
         <directory>src/cassandra/cli</directory>
+        <filtering>true</filtering>
       </resource>
     </resources>
 
@@ -158,12 +161,13 @@
         <executions>
           <execution>
             <id>create-bundle</id>
-            <phase>process-resources</phase>
+            <phase>package</phase>
             <configuration>
               <target>
                 <property name="bundle.basedir" 
                           value="${basedir}/target/classes/org/rhq/server/plugins/metrics/cassandra"/>
-                <copy file="${project.build.outputDirectory}/dbsetup.script" todir="${bundle.basedir}"/>
+                <copy file="${project.build.outputDirectory}/bundle.dbsetup.script"
+                      tofile="${bundle.basedir}/dbsetup.script"/>
                 <zip basedir="${bundle.basedir}/cassandra-1.1.0"
                      destfile="${bundle.basedir}/cassandra-1.1.0.zip"/>
                 <jar destfile="${bundle.basedir}/cassandra-bundle.jar">
@@ -187,5 +191,69 @@
       </plugin>
     </plugins>
   </build>
+
+  <profiles>
+    <profile>
+      <id>single-node</id>
+      <activation>
+        <property>
+          <name>cluster.mode</name>
+          <value>single</value>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>cassandra-maven-plugin</artifactId>
+            <version>1.1.0-1</version>
+            <executions>
+              <execution>
+                <id>start-cassandra</id>
+                <phase>compile</phase>
+                <goals>
+                  <goal>start</goal>
+                </goals>
+                <configuration>
+                  <script>${project.build.outputDirectory/dbsetup.script}</script>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <profile>
+      <id>multi-node</id>
+      <activation>
+        <property>
+          <name>cluster.mode</name>
+          <value>multi</value>
+        </property>
+      </activation>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.codehaus.mojo</groupId>
+            <artifactId>cassandra-maven-plugin</artifactId>
+            <version>1.1.0-1</version>
+            <executions>
+              <execution>
+                <id>start-cassandra</id>
+                <phase>compile</phase>
+                <goals>
+                  <goal>start-cluster</goal>
+                </goals>
+                <configuration>
+                  <script>${project.build.outputDirectory/dbsetup.script}</script>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+  </profiles>
 
 </project>

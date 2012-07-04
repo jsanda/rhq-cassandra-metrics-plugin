@@ -101,7 +101,7 @@ public class CassandraMetricsPluginComponentTest {
 
     @BeforeMethod
     public void initServer() throws Exception {
-        Cluster cluster = HFactory.getOrCreateCluster("rhq", "localhost:9160");
+        Cluster cluster = HFactory.getOrCreateCluster("rhq", "127.0.0.1:9160");
         keyspace = HFactory.createKeyspace("rhq", cluster);
 
         metricsServer = new CassandraMetricsPluginComponentStub();
