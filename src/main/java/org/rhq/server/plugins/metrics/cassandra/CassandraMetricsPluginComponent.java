@@ -238,11 +238,11 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
     @Override
     public void insertMetrics(MeasurementReport measurementReport) {
-        insertNumericData(measurementReport.getNumericData(), measurementReport.getCollectionTime());
-        insertTraitData(measurementReport.getTraitData(), measurementReport.getCollectionTime());
+        insertNumericData(measurementReport.getNumericData());
+        insertTraitData(measurementReport.getTraitData());
     }
 
-    private void insertNumericData(Set<MeasurementDataNumeric> dataSet, long collectionTime) {
+    private void insertNumericData(Set<MeasurementDataNumeric> dataSet) {
         Map<Integer, DateTime> updates = new TreeMap<Integer, DateTime>();
         Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
 
@@ -257,7 +257,7 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         updateMetricsQueue(oneHourMetricsDataCF, updates);
     }
 
-    private void insertTraitData(Set<MeasurementDataTrait> dataSet, long collectionTime) {
+    private void insertTraitData(Set<MeasurementDataTrait> dataSet) {
         Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
         Mutator<Integer> indexMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
 
