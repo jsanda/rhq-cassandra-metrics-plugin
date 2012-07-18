@@ -21,10 +21,10 @@ import org.rhq.core.domain.criteria.TraitMeasurementCriteria;
 import org.rhq.core.domain.measurement.DisplayType;
 import org.rhq.core.domain.measurement.MeasurementDataNumeric;
 import org.rhq.core.domain.measurement.MeasurementDataTrait;
-import org.rhq.core.domain.measurement.MeasurementReport;
 import org.rhq.core.domain.measurement.MeasurementSchedule;
 import org.rhq.core.domain.measurement.TraitMeasurement;
 import org.rhq.core.domain.measurement.TraitMeasurementDTO;
+import org.rhq.core.domain.measurement.calltime.CallTimeData;
 import org.rhq.core.domain.measurement.composite.MeasurementDataNumericHighLowComposite;
 import org.rhq.core.domain.util.PageList;
 import org.rhq.enterprise.server.plugin.pc.ControlFacet;
@@ -236,13 +236,14 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         return traits;
     }
 
-    @Override
-    public void insertMetrics(MeasurementReport measurementReport) {
-        insertNumericData(measurementReport.getNumericData());
-        insertTraitData(measurementReport.getTraitData());
-    }
+//    @Override
+//    public void insertMetrics(MeasurementReport measurementReport) {
+//        insertNumericData(measurementReport.getNumericData());
+//        insertTraitData(measurementReport.getTraitData());
+//    }
 
-    private void insertNumericData(Set<MeasurementDataNumeric> dataSet) {
+    @Override
+    public void addNumericData(Set<MeasurementDataNumeric> dataSet) {
         Map<Integer, DateTime> updates = new TreeMap<Integer, DateTime>();
         Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
 
@@ -257,7 +258,8 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
         updateMetricsQueue(oneHourMetricsDataCF, updates);
     }
 
-    private void insertTraitData(Set<MeasurementDataTrait> dataSet) {
+    @Override
+    public void addTraitData(Set<MeasurementDataTrait> dataSet) {
         Mutator<Integer> mutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
         Mutator<Integer> indexMutator = HFactory.createMutator(keyspace, IntegerSerializer.get());
 
@@ -278,6 +280,10 @@ public class CassandraMetricsPluginComponent implements MetricsServerPluginFacet
 
         mutator.execute();
         indexMutator.execute();
+    }
+
+    @Override
+    public void addCallTimeData(Set<CallTimeData> callTimeDatas) {
     }
 
     @Override

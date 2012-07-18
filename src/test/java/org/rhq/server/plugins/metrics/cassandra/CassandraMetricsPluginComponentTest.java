@@ -10,7 +10,9 @@ import static org.rhq.test.AssertUtils.assertPropertiesMatch;
 import static org.testng.Assert.assertEquals;
 
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 import org.joda.time.Chronology;
 import org.joda.time.DateTime;
@@ -29,7 +31,6 @@ import org.rhq.core.domain.measurement.DataType;
 import org.rhq.core.domain.measurement.DisplayType;
 import org.rhq.core.domain.measurement.MeasurementDataNumeric;
 import org.rhq.core.domain.measurement.MeasurementDataTrait;
-import org.rhq.core.domain.measurement.MeasurementReport;
 import org.rhq.core.domain.measurement.MeasurementSchedule;
 import org.rhq.core.domain.measurement.MeasurementScheduleRequest;
 import org.rhq.core.domain.measurement.composite.MeasurementDataNumericHighLowComposite;
@@ -126,20 +127,20 @@ public class CassandraMetricsPluginComponentTest {
         MeasurementScheduleRequest request = new MeasurementScheduleRequest(schedule.getId(), scheduleName, interval,
             enabled, dataType);
 
-        MeasurementReport report = new MeasurementReport();
-        report.addData(new MeasurementDataNumeric(buckets.get(0).getStartTime() + 10, request, 1.1));
-        report.addData(new MeasurementDataNumeric(buckets.get(0).getStartTime() + 20, request, 2.2));
-        report.addData(new MeasurementDataNumeric(buckets.get(0).getStartTime() + 30, request, 3.3));
-        report.addData(new MeasurementDataNumeric(buckets.get(59).getStartTime() + 10, request, 4.4));
-        report.addData(new MeasurementDataNumeric(buckets.get(59).getStartTime() + 20, request, 5.5));
-        report.addData(new MeasurementDataNumeric(buckets.get(59).getStartTime() + 30, request, 6.6));
+        Set<MeasurementDataNumeric> data = new HashSet<MeasurementDataNumeric>();
+        data.add(new MeasurementDataNumeric(buckets.get(0).getStartTime() + 10, request, 1.1));
+        data.add(new MeasurementDataNumeric(buckets.get(0).getStartTime() + 20, request, 2.2));
+        data.add(new MeasurementDataNumeric(buckets.get(0).getStartTime() + 30, request, 3.3));
+        data.add(new MeasurementDataNumeric(buckets.get(59).getStartTime() + 10, request, 4.4));
+        data.add(new MeasurementDataNumeric(buckets.get(59).getStartTime() + 20, request, 5.5));
+        data.add(new MeasurementDataNumeric(buckets.get(59).getStartTime() + 30, request, 6.6));
 
         // add some data outside the range
-        report.addData(new MeasurementDataNumeric(buckets.get(0).getStartTime() - 100, request, 1.23));
-        report.addData(new MeasurementDataNumeric(buckets.get(59).getStartTime() + buckets.getInterval() + 50, request,
+        data.add(new MeasurementDataNumeric(buckets.get(0).getStartTime() - 100, request, 1.23));
+        data.add(new MeasurementDataNumeric(buckets.get(59).getStartTime() + buckets.getInterval() + 50, request,
             4.56));
 
-        metricsServer.insertMetrics(report);
+        metricsServer.addNumericData(data);
         List<MeasurementDataNumericHighLowComposite> actualData = metricsServer.findDataForContext(null, null,
             schedule, beginTime.getMillis(), endTime.getMillis());
 
@@ -346,12 +347,12 @@ public class CassandraMetricsPluginComponentTest {
         MeasurementScheduleRequest request = new MeasurementScheduleRequest(scheduleId, scheduleName, interval,
             enabled, dataType);
 
-        MeasurementReport report = new MeasurementReport();
-        report.addData(new MeasurementDataNumeric(threeMinutesAgo.getMillis(), request, 3.2));
-        report.addData(new MeasurementDataNumeric(twoMinutesAgo.getMillis(), request, 3.9));
-        report.addData(new MeasurementDataNumeric(oneMinuteAgo.getMillis(), request, 2.6));
+        Set<MeasurementDataNumeric> data = new HashSet<MeasurementDataNumeric>();
+        data.add(new MeasurementDataNumeric(threeMinutesAgo.getMillis(), request, 3.2));
+        data.add(new MeasurementDataNumeric(twoMinutesAgo.getMillis(), request, 3.9));
+        data.add(new MeasurementDataNumeric(oneMinuteAgo.getMillis(), request, 2.6));
 
-        metricsServer.insertMetrics(report);
+        metricsServer.addNumericData(data);
 
         SliceQuery<Integer, Long, Double> query = HFactory.createSliceQuery(keyspace, IntegerSerializer.get(),
             LongSerializer.get(), DoubleSerializer.get());
@@ -403,12 +404,11 @@ public class CassandraMetricsPluginComponentTest {
         MeasurementScheduleRequest request = new MeasurementScheduleRequest(scheduleId, schedule1Name, interval,
             enabled, dataType, null, displayType, displayName, definitionId, resourceId);
 
-        MeasurementReport report = new MeasurementReport();
-        report.addData(new MeasurementDataTrait(now.minusMinutes(12).getMillis(), request, value2));
-        report.addData(new MeasurementDataTrait(now.minusMinutes(2).getMillis(), request, value1));
-        report.setCollectionTime(now.getMillis());
+        Set<MeasurementDataTrait> data = new HashSet<MeasurementDataTrait>();
+        data.add(new MeasurementDataTrait(now.minusMinutes(12).getMillis(), request, value2));
+        data.add(new MeasurementDataTrait(now.minusMinutes(2).getMillis(), request, value1));
 
-        metricsServer.insertMetrics(report);
+        metricsServer.addTraitData(data);
 
         List<HColumn<Long, String>> expected = asList(
             createTraitColumn(now.minusMinutes(12), value2),
@@ -454,13 +454,12 @@ public class CassandraMetricsPluginComponentTest {
         MeasurementScheduleRequest request = new MeasurementScheduleRequest(scheduleId, scheduleName, interval,
             enabled, dataType);
 
-        MeasurementReport report = new MeasurementReport();
-        report.addData(new MeasurementDataNumeric(firstMetricTime.getMillis(), request, 3.2));
-        report.addData(new MeasurementDataNumeric(secondMetricTime.getMillis(), request, 3.9));
-        report.addData(new MeasurementDataNumeric(thirdMetricTime.getMillis(), request, 2.6));
-        report.setCollectionTime(thirdMetricTime.plusMillis(500).getMillis());
+        Set<MeasurementDataNumeric> data = new HashSet<MeasurementDataNumeric>();
+        data.add(new MeasurementDataNumeric(firstMetricTime.getMillis(), request, 3.2));
+        data.add(new MeasurementDataNumeric(secondMetricTime.getMillis(), request, 3.9));
+        data.add(new MeasurementDataNumeric(thirdMetricTime.getMillis(), request, 2.6));
 
-        metricsServer.insertMetrics(report);
+        metricsServer.addNumericData(data);
         metricsServer.calculateAggregates();
 
         // verify one hour metric data is calculated
